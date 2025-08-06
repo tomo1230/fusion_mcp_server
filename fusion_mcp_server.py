@@ -1,0 +1,1172 @@
+# fusion_mcp_server.py - v 0.8.8 ベータ版 Beta version 2025.08.07
+#  
+#  Copyright (c) 2025 Kanbara Tomonori
+#  All rights reserved.
+#  
+#  x https://x.com/tomo1230
+#  
+#  This source code is proprietary and confidential.
+#  Unauthorized copying, modification, distribution, or use is strictly prohibited.
+#  
+#  Author: Kanbara Tomonori
+# 
+
+import adsk.core, adsk.fusion, traceback
+import threading
+import time
+import os
+import math
+import json
+
+# --- グローバル変数 ---
+_app = None
+_ui = None
+_command_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'fusion_command.txt')
+_response_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'fusion_response.txt')
+_file_watcher_thread = None
+_stop_flag = None
+_command_received_event_id = 'FusionMCPCommandReceived_JSON_Final'
+_command_received_event = None
+_event_handler = None
+_handlers = []
+_mcp_panel = None
+_is_running = False
+_start_cmd_def = None
+_stop_cmd_def = None
+_start_cmd_control = None
+_stop_cmd_control = None
+
+# --- 共通ヘルパー関数 ---
+def log_debug(message):
+    try:
+        if _ui:
+            text_palette = _ui.palettes.itemById('TextCommands')
+            if text_palette:
+                text_palette.writeText(f"[MCP-PY-STABLE] {message}")
+    except:
+        pass
+
+def get_fusion_unit_scale():
+    return 0.1 # mmからcmへの変換係数
+
+def get_construction_plane(root: adsk.fusion.Component, plane_str: str):
+    plane_map = {'yz': root.yZConstructionPlane, 'xz': root.xZConstructionPlane, 'xy': root.xYConstructionPlane}
+    return plane_map.get(str(plane_str).lower(), root.xYConstructionPlane)
+
+def move_body_to_absolute_position(body: adsk.fusion.BRepBody, target_cm_pt: adsk.core.Point3D):
+    if not body: return
+    current_center_pt = body.physicalProperties.centerOfMass
+    move_vec = current_center_pt.vectorTo(target_cm_pt)
+    if move_vec.length < 1e-6: return
+    transform = adsk.core.Matrix3D.create()
+    transform.translation = move_vec
+    root = _app.activeProduct.rootComponent
+    move_features = root.features.moveFeatures
+    move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([body]), transform)
+    move_features.add(move_input)
+
+def move_body_with_placement(body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction='positive'):
+    """
+    【Direction対応完全修正版】directionパラメータを考慮した配置処理
+    direction=negativeの場合、Z軸配置の基準を適切に調整
+    """
+    if not body: 
+        return
+    
+    bbox = body.boundingBox
+    current_centroid = body.physicalProperties.centerOfMass
+    scale = get_fusion_unit_scale()
+    
+    log_debug(f"Direction-aware placement: direction={direction}, z_placement={z_placement}")
+    log_debug(f"配置前 - 重心: ({current_centroid.x/scale:.2f}, {current_centroid.y/scale:.2f}, {current_centroid.z/scale:.2f})")
+    log_debug(f"配置前 - 範囲: Z({bbox.minPoint.z/scale:.2f}~{bbox.maxPoint.z/scale:.2f})")
+    
+    # Z軸方向の配置計算（Direction対応完全修正版）
+    if z_placement == 'bottom':
+        if direction.lower() == 'positive':
+            # Positive direction: 底面がcz_cmになるように配置
+            target_centroid_z = cz_cm + (current_centroid.z - bbox.minPoint.z)
+            log_debug(f"Z配置(bottom+positive): 底面をZ={cz_cm/scale:.2f}mmに → 重心目標Z={target_centroid_z/scale:.2f}mm")
+        else:
+            # Negative direction: 上面がcz_cmになるように配置（下向き押し出しの結果）
+            target_centroid_z = cz_cm + (current_centroid.z - bbox.maxPoint.z)
+            log_debug(f"Z配置(bottom+negative): 上面をZ={cz_cm/scale:.2f}mmに → 重心目標Z={target_centroid_z/scale:.2f}mm")
+    elif z_placement == 'top':
+        if direction.lower() == 'positive':
+            # Positive direction: 上面がcz_cmになるように配置
+            target_centroid_z = cz_cm + (current_centroid.z - bbox.maxPoint.z)
+            log_debug(f"Z配置(top+positive): 上面をZ={cz_cm/scale:.2f}mmに → 重心目標Z={target_centroid_z/scale:.2f}mm")
+        else:
+            # Negative direction: 底面がcz_cmになるように配置（下向き押し出しの結果）
+            target_centroid_z = cz_cm + (current_centroid.z - bbox.minPoint.z)
+            log_debug(f"Z配置(top+negative): 底面をZ={cz_cm/scale:.2f}mmに → 重心目標Z={target_centroid_z/scale:.2f}mm")
+    else:  # center
+        # Center placement: directionに関係なく重心が中心
+        target_centroid_z = cz_cm
+        log_debug(f"Z配置(center): 重心をZ={cz_cm/scale:.2f}mmに")
+    
+    # X軸方向の配置計算（既存のまま）
+    if x_placement == 'left':
+        target_centroid_x = cx_cm + (current_centroid.x - bbox.minPoint.x)
+        log_debug(f"X配置(left): 左端をX={cx_cm/scale:.2f}mmに → 重心目標X={target_centroid_x/scale:.2f}mm")
+    elif x_placement == 'right':
+        target_centroid_x = cx_cm + (current_centroid.x - bbox.maxPoint.x)
+        log_debug(f"X配置(right): 右端をX={cx_cm/scale:.2f}mmに → 重心目標X={target_centroid_x/scale:.2f}mm")
+    else:  # center
+        target_centroid_x = cx_cm
+        log_debug(f"X配置(center): 重心をX={cx_cm/scale:.2f}mmに")
+    
+    # Y軸方向の配置計算（既存のまま）
+    if y_placement == 'front':
+        target_centroid_y = cy_cm + (current_centroid.y - bbox.maxPoint.y)
+        log_debug(f"Y配置(front): 前端をY={cy_cm/scale:.2f}mmに → 重心目標Y={target_centroid_y/scale:.2f}mm")
+    elif y_placement == 'back':
+        target_centroid_y = cy_cm + (current_centroid.y - bbox.minPoint.y)
+        log_debug(f"Y配置(back): 後端をY={cy_cm/scale:.2f}mmに → 重心目標Y={target_centroid_y/scale:.2f}mm")
+    else:  # center
+        target_centroid_y = cy_cm
+        log_debug(f"Y配置(center): 重心をY={cy_cm/scale:.2f}mmに")
+    
+    # 計算された目標位置に移動
+    target_point = adsk.core.Point3D.create(target_centroid_x, target_centroid_y, target_centroid_z)
+    log_debug(f"移動実行: 目標重心位置 ({target_centroid_x/scale:.2f}, {target_centroid_y/scale:.2f}, {target_centroid_z/scale:.2f})")
+    
+    move_body_to_absolute_position(body, target_point)
+    
+def find_entity_by_name(name: str):
+    if not name: return None
+    root = _app.activeProduct.rootComponent
+    entity = next((b for b in root.bRepBodies if b.name == name), None)
+    if entity: return entity
+    return next((occ for occ in root.occurrences if occ.name.split(':', 1)[0] == name), None)
+
+# --- デバッグ用関数 ---
+def debug_body_placement(body_name: str, **kwargs):
+    """
+    ボディの配置情報を詳細表示するデバッグ関数
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        return f"ボディ '{body_name}' が見つかりません。"
+    
+    bbox = body.boundingBox
+    centroid = body.physicalProperties.centerOfMass
+    scale = get_fusion_unit_scale()
+    
+    info = f"=== {body_name} の配置情報 ===\n"
+    info += f"重心位置: ({centroid.x/scale:.2f}, {centroid.y/scale:.2f}, {centroid.z/scale:.2f}) mm\n"
+    info += f"バウンディングボックス:\n"
+    info += f"  最小点: ({bbox.minPoint.x/scale:.2f}, {bbox.minPoint.y/scale:.2f}, {bbox.minPoint.z/scale:.2f}) mm\n"
+    info += f"  最大点: ({bbox.maxPoint.x/scale:.2f}, {bbox.maxPoint.y/scale:.2f}, {bbox.maxPoint.z/scale:.2f}) mm\n"
+    info += f"サイズ:\n"
+    info += f"  幅(X): {(bbox.maxPoint.x - bbox.minPoint.x)/scale:.2f} mm\n"
+    info += f"  奥行(Y): {(bbox.maxPoint.y - bbox.minPoint.y)/scale:.2f} mm\n"
+    info += f"  高さ(Z): {(bbox.maxPoint.z - bbox.minPoint.z)/scale:.2f} mm\n"
+    info += f"配置基準:\n"
+    info += f"  左端(X-): {bbox.minPoint.x/scale:.2f} mm\n"
+    info += f"  右端(X+): {bbox.maxPoint.x/scale:.2f} mm\n"
+    info += f"  後端(Y-): {bbox.minPoint.y/scale:.2f} mm\n"
+    info += f"  前端(Y+): {bbox.maxPoint.y/scale:.2f} mm\n"
+    info += f"  底面(Z-): {bbox.minPoint.z/scale:.2f} mm\n"
+    info += f"  上面(Z+): {bbox.maxPoint.z/scale:.2f} mm\n"
+    
+    return info
+
+# --- コマンド実行関数 ---
+def create_cube(size: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
+    scale = get_fusion_unit_scale()
+    size_cm = size * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(get_construction_plane(root, plane))
+    sketch.sketchCurves.sketchLines.addTwoPointRectangle(adsk.core.Point3D.create(-size_cm/2, -size_cm/2, 0), adsk.core.Point3D.create(size_cm/2, size_cm/2, 0))
+    prof = sketch.profiles.item(0)
+    extrudes = root.features.extrudeFeatures
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(size_cm)
+    
+    # Direction処理
+    if direction.lower() == 'positive':
+        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+    else:
+        # negativeの場合は、逆方向の押し出しを実現
+        extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
+        ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+    
+    # テーパー角度の処理
+    if taper_angle != 0:
+        final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
+        taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
+        ext_input.taperAngle = taper_angle_input
+    
+    extrude_feature = extrudes.add(ext_input)
+    new_body = extrude_feature.bodies.item(0)
+    sketch.isVisible = False
+    
+    # 【重要】Direction対応修正版の配置関数を使用
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
+    
+    if body_name: new_body.name = body_name
+    return new_body.name
+
+def create_cylinder(radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
+    scale = get_fusion_unit_scale()
+    radius_cm, height_cm = radius * scale, height * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(get_construction_plane(root, plane))
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(adsk.core.Point3D.create(0, 0, 0), radius_cm)
+    prof = sketch.profiles.item(0)
+    extrudes = root.features.extrudeFeatures
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(height_cm)
+    
+    # Direction処理
+    if direction.lower() == 'positive':
+        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+    else:
+        # negativeの場合は、逆方向の押し出しを実現
+        extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
+        ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+    
+    # テーパー角度の処理
+    if taper_angle != 0:
+        final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
+        taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
+        ext_input.taperAngle = taper_angle_input
+    
+    extrude_feature = extrudes.add(ext_input)
+    new_body = extrude_feature.bodies.item(0)
+    sketch.isVisible = False
+    
+    # 【重要】Direction対応修正版の配置関数を使用
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
+    
+    if body_name: new_body.name = body_name
+    return new_body.name
+
+def create_box(width: float=50, depth: float=30, height: float=20, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
+    scale = get_fusion_unit_scale()
+    width_cm, depth_cm, height_cm = width * scale, depth * scale, height * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(get_construction_plane(root, plane))
+    sketch.sketchCurves.sketchLines.addTwoPointRectangle(adsk.core.Point3D.create(-width_cm/2, -depth_cm/2, 0), adsk.core.Point3D.create(width_cm/2, depth_cm/2, 0))
+    prof = sketch.profiles.item(0)
+    extrudes = root.features.extrudeFeatures
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(height_cm)
+    
+    # Direction処理
+    if direction.lower() == 'positive':
+        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+    else:
+        # negativeの場合は、逆方向の押し出しを実現
+        extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
+        ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+    
+    # テーパー角度の処理
+    if taper_angle != 0:
+        final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
+        taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
+        ext_input.taperAngle = taper_angle_input
+    
+    new_body = extrudes.add(ext_input).bodies.item(0)
+    sketch.isVisible = False
+    
+    # 配置関数を使用
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
+    
+    if body_name: new_body.name = body_name
+    return new_body.name
+
+def create_sphere(radius: float=25, body_name: str=None, cx: float=0, cy: float=0, cz: float=0, **kwargs):
+    scale = get_fusion_unit_scale()
+    radius_cm = radius * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    center_pt = adsk.core.Point3D.create(0, 0, 0)
+    arc = sketch.sketchCurves.sketchArcs.addByCenterStartEnd(center_pt, adsk.core.Point3D.create(0, radius_cm, 0), adsk.core.Point3D.create(0, -radius_cm, 0))
+    sketch.sketchCurves.sketchLines.addByTwoPoints(arc.startSketchPoint, arc.endSketchPoint)
+    prof = sketch.profiles.item(0)
+    revolves = root.features.revolveFeatures
+    revolution_axis = root.yConstructionAxis
+    revolve_input = revolves.createInput(prof, revolution_axis, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    revolve_input.setAngleExtent(False, adsk.core.ValueInput.createByReal(math.pi * 2))
+    new_body = revolves.add(revolve_input).bodies.item(0)
+    sketch.isVisible = False
+    move_body_to_absolute_position(new_body, adsk.core.Point3D.create(cx_cm, cy_cm, cz_cm))
+    if body_name: new_body.name = body_name
+    return new_body.name
+
+def create_hemisphere(radius: float=25, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, orientation: str='positive', z_placement: str='bottom', x_placement: str='center', y_placement: str='center', **kwargs):
+    scale = get_fusion_unit_scale()
+    radius_cm = radius * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    arc = sketch.sketchCurves.sketchArcs.addByThreePoints(adsk.core.Point3D.create(-radius_cm, 0, 0), adsk.core.Point3D.create(0, radius_cm, 0), adsk.core.Point3D.create(radius_cm, 0, 0))
+    axis_line = sketch.sketchCurves.sketchLines.addByTwoPoints(arc.startSketchPoint, arc.endSketchPoint)
+    prof = sketch.profiles.item(0)
+    revolves = root.features.revolveFeatures
+    revolve_input = revolves.createInput(prof, axis_line, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    angle = adsk.core.ValueInput.createByReal(math.pi * (-1 if orientation.lower() == 'negative' else 1))
+    revolve_input.setAngleExtent(False, angle)
+    new_body = revolves.add(revolve_input).bodies.item(0)
+    sketch.isVisible = False
+    transform = adsk.core.Matrix3D.create()
+    if plane.lower() == 'xz':
+        transform.setToRotation(math.radians(90), adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0,0,0))
+    elif plane.lower() == 'yz':
+        transform.setToRotation(math.radians(-90), adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0,0,0))
+    if plane.lower() != 'xy':
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # hemisphereにはdirectionパラメータなし
+    if body_name: new_body.name = body_name
+    return new_body.name
+
+def create_cone(radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', **kwargs):
+    scale = get_fusion_unit_scale()
+    radius_cm, height_cm = radius * scale, height * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    p1 = adsk.core.Point3D.create(0, 0, 0)
+    p2 = adsk.core.Point3D.create(radius_cm, 0, 0)
+    p3 = adsk.core.Point3D.create(0, 0, height_cm)
+    lines = sketch.sketchCurves.sketchLines
+    lines.addByTwoPoints(p1, p2)
+    lines.addByTwoPoints(p2, p3)
+    axis_line = lines.addByTwoPoints(p3, p1)
+    prof = sketch.profiles.item(0)
+    revolves = root.features.revolveFeatures
+    revolve_input = revolves.createInput(prof, axis_line, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    revolve_input.setAngleExtent(False, adsk.core.ValueInput.createByReal(math.pi * 2))
+    new_body = revolves.add(revolve_input).bodies.item(0)
+    sketch.isVisible = False
+    transform = adsk.core.Matrix3D.create()
+    if plane.lower() == 'xz':
+        transform.setToRotation(math.radians(-90), adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0,0,0))
+    elif plane.lower() == 'yz':
+        transform.setToRotation(math.radians(90), adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0,0,0))
+    if plane.lower() != 'xy':
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # coneにはdirectionパラメータなし
+    if body_name: new_body.name = body_name
+    return new_body.name
+        
+def create_polygon_prism(num_sides: int=6, radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
+    if num_sides < 3: raise ValueError("多角形の辺の数は3以上でなければなりません。")
+    scale = get_fusion_unit_scale()
+    radius_cm, height_cm = radius * scale, height * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(get_construction_plane(root, plane))
+    points = [adsk.core.Point3D.create(radius_cm * math.cos(i * 2 * math.pi / num_sides), radius_cm * math.sin(i * 2 * math.pi / num_sides), 0) for i in range(num_sides)]
+    lines = sketch.sketchCurves.sketchLines
+    for i in range(num_sides):
+        lines.addByTwoPoints(points[i], points[(i + 1) % num_sides])
+    prof = sketch.profiles.item(0)
+    extrudes = root.features.extrudeFeatures
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(height_cm)
+    
+    # Direction処理
+    if direction.lower() == 'positive':
+        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+    else:
+        # negativeの場合は、逆方向の押し出しを実現
+        extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
+        ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+    
+    # テーパー角度の処理
+    if taper_angle != 0:
+        final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
+        taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
+        ext_input.taperAngle = taper_angle_input
+    
+    new_body = extrudes.add(ext_input).bodies.item(0)
+    sketch.isVisible = False
+    
+    # 配置関数を使用
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
+    
+    if body_name: new_body.name = body_name
+    return new_body.name
+        
+def create_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane='xy', z_placement='center', x_placement='center', y_placement='center', body_name=None, **kwargs):
+    scale = get_fusion_unit_scale()
+    major_radius_cm, minor_radius_cm = major_radius * scale, minor_radius * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    sketch = root.sketches.add(root.xZConstructionPlane)
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(
+        adsk.core.Point3D.create(major_radius_cm, 0, 0), minor_radius_cm)
+    prof = sketch.profiles.item(0)
+    revolves = root.features.revolveFeatures
+    revolve_input = revolves.createInput(prof, root.zConstructionAxis, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    revolve_input.setAngleExtent(False, adsk.core.ValueInput.createByReal(math.pi * 2))
+    new_body = revolves.add(revolve_input).bodies.item(0)
+    sketch.isVisible = False
+    
+    if plane.lower() == 'xz':
+        transform = adsk.core.Matrix3D.create()
+        transform.setToRotation(math.radians(90), 
+                              adsk.core.Vector3D.create(1, 0, 0), 
+                              adsk.core.Point3D.create(0, 0, 0))
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(
+            adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    elif plane.lower() == 'yz':
+        transform = adsk.core.Matrix3D.create()
+        transform.setToRotation(math.radians(90), 
+                              adsk.core.Vector3D.create(0, 1, 0), 
+                              adsk.core.Point3D.create(0, 0, 0))
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(
+            adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # torusにはdirectionパラメータなし
+    
+    if body_name:
+        new_body.name = body_name
+    return new_body.name
+
+def create_half_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane='xy', z_placement='center', x_placement='center', y_placement='center', body_name=None, orientation: str='back', plane_rotation_angle: float=0, opening_extrude_distance: float=0, **kwargs):
+    scale = get_fusion_unit_scale()
+    major_radius_cm, minor_radius_cm = major_radius * scale, minor_radius * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+    root = _app.activeProduct.rootComponent
+    move_features = root.features.moveFeatures
+
+    # --- 本体作成 ---
+    sketch = root.sketches.add(root.xZConstructionPlane)
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(
+        adsk.core.Point3D.create(major_radius_cm, 0, 0), minor_radius_cm)
+    prof = sketch.profiles.item(0)
+    revolves = root.features.revolveFeatures
+    revolve_input = revolves.createInput(prof, root.zConstructionAxis, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    revolve_input.setAngleExtent(False, adsk.core.ValueInput.createByReal(math.pi))
+    new_body = revolves.add(revolve_input).bodies.item(0)
+    sketch.isVisible = False
+
+    # --- 回転処理 ---
+    transform_matrix = adsk.core.Matrix3D.create()
+    plane_normal = adsk.core.Vector3D.create(0, 0, 1)
+    
+    plane_lower = plane.lower()
+    if plane_lower == 'xz':
+        transform_matrix.setToRotation(math.pi / 2, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0,0,0))
+        plane_normal = adsk.core.Vector3D.create(0, 1, 0)
+    elif plane_lower == 'yz':
+        transform_matrix.setToRotation(-math.pi / 2, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0,0,0))
+        plane_normal = adsk.core.Vector3D.create(1, 0, 0)
+
+    orientation_angle_deg = 0
+    orientation_lower = orientation.lower()
+
+    if plane_lower == 'xy':
+        if orientation_lower == 'back': orientation_angle_deg = 180
+        elif orientation_lower == 'left': orientation_angle_deg = 90
+        elif orientation_lower == 'right': orientation_angle_deg = -90
+    elif plane_lower == 'xz':
+        if orientation_lower == 'back': orientation_angle_deg = 180
+        elif orientation_lower == 'left': orientation_angle_deg = 90
+        elif orientation_lower == 'right': orientation_angle_deg = -90
+    elif plane_lower == 'yz':
+        if orientation_lower == 'back': orientation_angle_deg = 180
+        elif orientation_lower == 'left': orientation_angle_deg = 90
+        elif orientation_lower == 'right': orientation_angle_deg = -90
+
+    total_rotation_angle_rad = math.radians(orientation_angle_deg + plane_rotation_angle)
+
+    if total_rotation_angle_rad != 0:
+        orientation_matrix = adsk.core.Matrix3D.create()
+        orientation_matrix.setToRotation(total_rotation_angle_rad, plane_normal, adsk.core.Point3D.create(0,0,0))
+        transform_matrix.transformBy(orientation_matrix)
+
+    if not transform_matrix.isEqualTo(adsk.core.Matrix3D.create()):
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform_matrix)
+        move_features.add(move_input)
+        adsk.doEvents()
+
+    # --- 最終配置 ---
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')
+    
+    # --- 開口断面の押し出し処理 ---
+    if opening_extrude_distance != 0:
+        extrude_faces = adsk.core.ObjectCollection.create()
+        for face in new_body.faces:
+            if face.geometry.objectType == adsk.core.Plane.classType():
+                extrude_faces.add(face)
+        
+        if extrude_faces.count == 2:
+            extrudes = root.features.extrudeFeatures
+            distance = adsk.core.ValueInput.createByReal(opening_extrude_distance * get_fusion_unit_scale())
+            extrude_input = extrudes.createInput(extrude_faces, adsk.fusion.FeatureOperations.JoinFeatureOperation)
+            extrude_input.setDistanceExtent(False, distance)
+            extrudes.add(extrude_input)
+            log_debug(f"Extruded opening faces by {opening_extrude_distance}mm.")
+        else:
+            log_debug(f"Warning: Expected 2 planar faces for extrusion, but found {extrude_faces.count}. Skipping extrusion.")
+
+    if body_name:
+        new_body.name = body_name
+    return new_body.name
+    
+def create_pipe(x1: float=0, y1: float=0, z1: float=0, x2: float=50, y2: float=0, z2: float=50, radius: float=5, body_name: str=None, **kwargs):
+    scale = get_fusion_unit_scale()
+    radius_cm = radius * scale
+    p1 = adsk.core.Point3D.create(x1 * scale, y1 * scale, z1 * scale)
+    p2 = adsk.core.Point3D.create(x2 * scale, y2 * scale, z2 * scale)
+    root = _app.activeProduct.rootComponent
+    direction = p1.vectorTo(p2)
+    length = direction.length
+    direction.normalize()
+    center = adsk.core.Point3D.create(
+        (p1.x + p2.x) / 2,
+        (p1.y + p2.y) / 2,
+        (p1.z + p2.z) / 2
+    )
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(adsk.core.Point3D.create(0, 0, 0), radius_cm)
+    prof = sketch.profiles.item(0)
+    extrudes = root.features.extrudeFeatures
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(length)
+    ext_input.setTwoSidesExtent(
+        adsk.fusion.DistanceExtentDefinition.create(adsk.core.ValueInput.createByReal(length/2)),
+        adsk.fusion.DistanceExtentDefinition.create(adsk.core.ValueInput.createByReal(length/2))
+    )
+    extrude_feature = extrudes.add(ext_input)
+    new_body = extrude_feature.bodies.item(0)
+    sketch.isVisible = False
+    z_axis = adsk.core.Vector3D.create(0, 0, 1)
+    dot_product = direction.dotProduct(z_axis)
+    if abs(dot_product) < 0.999:
+        rotation_axis = z_axis.crossProduct(direction)
+        rotation_axis.normalize()
+        angle = z_axis.angleTo(direction)
+        transform = adsk.core.Matrix3D.create()
+        transform.setToRotation(angle, rotation_axis, adsk.core.Point3D.create(0, 0, 0))
+        
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    elif dot_product < 0:
+        transform = adsk.core.Matrix3D.create()
+        transform.setToRotation(math.pi, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0, 0, 0))
+        
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+    
+    current_center = new_body.physicalProperties.centerOfMass
+    move_vector = current_center.vectorTo(center)
+    
+    if move_vector.length > 1e-6:
+        transform2 = adsk.core.Matrix3D.create()
+        transform2.translation = move_vector
+        
+        move_features = root.features.moveFeatures
+        move_input2 = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform2)
+        move_features.add(move_input2)
+    
+    if body_name:
+        new_body.name = body_name
+    
+    return new_body.name
+
+def create_polygon_sweep(cx=0, cy=0, cz=0, path_radius=30, sweep_angle=360,
+                        profile_sides=6, profile_radius=10, plane="xy",
+                        x_placement="center", y_placement="center", z_placement="center",
+                        twist_rotations=0, body_name=None, **kwargs):
+    """
+    多角形プロファイルを円形パスでスイープします。
+    sweep_angleは360のみ指定可能です。
+    twist_rotations（回転数）で0回転から10回転まで指定可能です。
+    """
+    # --- パラメータ検証と前処理 ---
+    if sweep_angle != 360:
+        raise ValueError(f"スイープ角度(sweep_angle)は360のみ指定可能です。指定された値: {sweep_angle}")
+
+    # 回転数の検証と角度への変換
+    if twist_rotations not in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+        raise ValueError(f"回転数(twist_rotations)は0から10まで指定可能です。指定された値: {twist_rotations}")
+    
+    twist_angle = twist_rotations * 360
+    log_debug(f"回転数 {twist_rotations} を角度 {twist_angle}度 に変換しました")
+
+    if path_radius <= profile_radius:
+        raise ValueError(f"パスの半径(path_radius: {path_radius})は、プロファイルの半径(profile_radius: {profile_radius})より大きくする必要があります。スイープ形状が自己交差してしまいます。")
+
+    root = _app.activeProduct.rootComponent
+    scale = get_fusion_unit_scale()
+
+    # 入力値をmmからcmに変換
+    path_radius_cm = path_radius * scale
+    profile_radius_cm = profile_radius * scale
+    cx_cm, cy_cm, cz_cm = cx * scale, cy * scale, cz * scale
+
+    log_debug(f"Creating polygon sweep: path_radius={path_radius}mm, profile_radius={profile_radius}mm, twist_rotations={twist_rotations}回転 (twist_angle={twist_angle}度)")
+
+    # --- ジオメトリ作成 ---
+    
+    # 1. パススケッチを作成 (XZ平面上)
+    path_sketch = root.sketches.add(root.xZConstructionPlane)
+    center_point = adsk.core.Point3D.create(0, 0, 0)
+
+    # 360度の場合は完全な円を作成
+    path_curve = path_sketch.sketchCurves.sketchCircles.addByCenterRadius(center_point, path_radius_cm)
+
+    # 2. XY平面上にプロファイルスケッチを作成 (パスの始点に垂直)
+    profile_sketch = root.sketches.add(root.xYConstructionPlane)
+    profile_center_pt = adsk.core.Point3D.create(path_radius_cm, 0, 0)
+
+    profile_points = []
+    for i in range(profile_sides):
+        angle = (2 * math.pi * i) / profile_sides
+        x = profile_center_pt.x + profile_radius_cm * math.cos(angle)
+        y = profile_center_pt.y + profile_radius_cm * math.sin(angle)
+        profile_points.append(adsk.core.Point3D.create(x, y, 0))
+
+    lines = profile_sketch.sketchCurves.sketchLines
+    for i in range(profile_sides):
+        lines.addByTwoPoints(profile_points[i], profile_points[(i + 1) % profile_sides])
+    
+    try:
+        profile = profile_sketch.profiles.item(0)
+    except:
+        raise RuntimeError("多角形の閉じたプロファイルの作成に失敗しました。")
+
+    # 3. スイープを実行
+    path_obj = adsk.fusion.Path.create(path_curve, adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
+    sweeps = root.features.sweepFeatures
+    sweep_input = sweeps.createInput(profile, path_obj, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    
+    # --- ねじり角度の設定 ---
+    if twist_angle != 0:
+        log_debug(f"Setting twist angle: {twist_angle} degrees")
+        # ねじり角度をラジアンに変換
+        twist_angle_rad = math.radians(twist_angle)
+        twist_angle_value = adsk.core.ValueInput.createByReal(twist_angle_rad)
+        
+        # スイープにねじりオプションを設定
+        try:
+            sweep_input.twistAngle = twist_angle_value
+            log_debug("Twist angle set successfully")
+        except Exception as e:
+            log_debug(f"Warning: Failed to set twist angle: {e}")
+            # ねじり角度の設定に失敗した場合でも、通常のスイープを続行
+    
+    new_body = sweeps.add(sweep_input).bodies.item(0)
+    path_sketch.isVisible = False
+    profile_sketch.isVisible = False
+
+    # --- 変換と配置 ---
+    
+    # 4. ボディを目的の平面に回転
+    transform = adsk.core.Matrix3D.create()
+    plane_lower = plane.lower()
+
+    if plane_lower == 'xy':
+        # XZ平面からXY平面へ -> X軸を中心に-90度回転
+        transform.setToRotation(-math.pi / 2, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0,0,0))
+    elif plane_lower == 'yz':
+        # XZ平面からYZ平面へ -> Z軸を中心に90度回転
+        transform.setToRotation(math.pi / 2, adsk.core.Vector3D.create(0, 0, 1), adsk.core.Point3D.create(0,0,0))
+
+    if plane_lower != 'xz':
+        move_features = root.features.moveFeatures
+        move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([new_body]), transform)
+        move_features.add(move_input)
+        adsk.doEvents()
+
+    # 5. ボディを最終位置に移動
+    move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')
+
+    if body_name:
+        new_body.name = body_name
+    
+    log_debug(f"Polygon sweep created successfully with {twist_rotations} rotations (twist_angle: {twist_angle} degrees)")
+    return new_body.name
+
+def copy_body_symmetric(source_body_name: str, new_body_name: str, plane: str = 'xy', **kwargs):
+    source_body = find_entity_by_name(source_body_name)
+    if not source_body: raise ValueError(f"ボディ '{source_body_name}' が見つかりません。")
+    root = _app.activeProduct.rootComponent
+    mirror_features = root.features.mirrorFeatures
+    mirror_input = mirror_features.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), get_construction_plane(root, plane))
+    mirror_input.pattern_type = 0
+    new_body = mirror_features.add(mirror_input).bodies.item(0)
+    if new_body_name: new_body.name = new_body_name
+    return new_body.name
+        
+def create_circular_pattern(source_body_name: str, axis: str = 'z', quantity: int = 4, angle: float = 360.0, new_body_base_name: str = None, **kwargs):
+    source_body = find_entity_by_name(source_body_name)
+    if not source_body: raise ValueError(f"ボディ '{source_body_name}' が見つかりません。")
+    root = _app.activeProduct.rootComponent
+    bodies_before = {b.name for b in root.bRepBodies}
+    axis_map = {'x': root.xConstructionAxis, 'y': root.yConstructionAxis, 'z': root.zConstructionAxis}
+    rotation_axis = axis_map.get(axis.lower())
+    if not rotation_axis: raise ValueError(f"無効な軸: {axis}")
+    circular_patterns = root.features.circularPatternFeatures
+    pattern_input = circular_patterns.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), rotation_axis)
+    if angle == 360.0:
+        pattern_input.isFull = True
+    else:
+        pattern_input.isFull = False
+    pattern_input.quantity = adsk.core.ValueInput.createByReal(quantity)
+    pattern_input.totalAngle = adsk.core.ValueInput.createByString(f"{angle} deg")
+    pattern_input.pattern_type = 0
+    circular_patterns.add(pattern_input)
+    if new_body_base_name:
+        new_body_index = 1
+        for body in root.bRepBodies:
+            if body.name not in bodies_before:
+                body.name = f"{new_body_base_name}_{new_body_index}"
+                new_body_index += 1; bodies_before.add(body.name)
+    return f"{quantity}個の円形状パターンを作成しました。"
+        
+def create_rectangular_pattern(source_body_name: str, distance_type: str='spacing', quantity_one: int=2, distance_one: float=10.0, direction_one_axis: str='x', direction_one_type: str='one_direction', quantity_two: int=1, distance_two: float=10.0, direction_two_axis: str='y', direction_two_type: str='one_direction', new_body_base_name: str=None, **kwargs):
+    source_body = find_entity_by_name(source_body_name)
+    if not source_body: raise ValueError(f"ボディ '{source_body_name}' が見つかりません。")
+    root = _app.activeProduct.rootComponent
+    bodies_before = {b.name for b in root.bRepBodies}
+    scale = get_fusion_unit_scale()
+    axis_map = {'x': root.xConstructionAxis, 'y': root.yConstructionAxis, 'z': root.zConstructionAxis}
+    dir_one = axis_map.get(direction_one_axis.lower())
+    dir_two = axis_map.get(direction_two_axis.lower())
+    rect_patterns = root.features.rectangularPatternFeatures
+    dist_type_enum = adsk.fusion.PatternDistanceType.ExtentPatternDistanceType if distance_type.lower() == 'extent' else adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
+    pattern_input = rect_patterns.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), dir_one, adsk.core.ValueInput.createByReal(quantity_one), adsk.core.ValueInput.createByReal(distance_one * scale), dist_type_enum)
+    try:
+        pattern_input.directionOnePatternType = adsk.fusion.PatternDirectionOptions.SymmetricPatternDirection if direction_one_type.lower() == 'symmetric' else adsk.fusion.PatternDirectionOptions.OneDirectionPatternDirection
+        if quantity_two > 1 and dir_two:
+             pattern_input.directionTwoPatternType = adsk.fusion.PatternDirectionOptions.SymmetricPatternDirection if direction_two_type.lower() == 'symmetric' else adsk.fusion.PatternDirectionOptions.OneDirectionPatternDirection
+    except AttributeError:
+        if 'symmetric' in [direction_one_type.lower(), direction_two_type.lower()]: log_debug("API経由での対称パターン作成がサポートされていないバージョンです。")
+    if quantity_two > 1 and dir_two:
+        pattern_input.setDirectionTwo(dir_two, adsk.core.ValueInput.createByReal(quantity_two), adsk.core.ValueInput.createByReal(distance_two * scale))
+    pattern_input.pattern_type = 0
+    rect_patterns.add(pattern_input)
+    if new_body_base_name:
+        new_body_index = 1
+        for body in root.bRepBodies:
+            if body.name not in bodies_before: body.name = f"{new_body_base_name}_{new_body_index}"; new_body_index += 1; bodies_before.add(body.name)
+    return f"{quantity_one}x{quantity_two}の矩形状パターンを作成しました。"
+        
+def add_fillet(radius: float=1.0, **kwargs):
+    selections = _ui.activeSelections
+    if selections.count == 0: return "フィレット対象のエッジが選択されていません。"
+    edges_to_fillet = adsk.core.ObjectCollection.create()
+    for sel in selections:
+        if sel.entity.objectType == adsk.fusion.BRepEdge.classType(): edges_to_fillet.add(sel.entity)
+    if edges_to_fillet.count == 0: return "フィレット対象のエッジが見つかりません。"
+    root = _app.activeProduct.rootComponent
+    fillets = root.features.filletFeatures
+    fillet_input = fillets.createInput()
+    fillet_input.addConstantRadiusEdgeSet(edges_to_fillet, adsk.core.ValueInput.createByReal(radius * get_fusion_unit_scale()), True)
+    fillets.add(fillet_input)
+    return "フィレットを追加しました。"
+        
+def add_chamfer(distance: float=1.0, **kwargs):
+    selections = _ui.activeSelections
+    if selections.count == 0: return "面取り対象のエッジが選択されていません。"
+    edges_to_chamfer = adsk.core.ObjectCollection.create()
+    for sel in selections:
+        if sel.entity.objectType == adsk.fusion.BRepEdge.classType(): edges_to_chamfer.add(sel.entity)
+    if edges_to_chamfer.count == 0: return "面取り対象のエッジが見つかりません。"
+    root = _app.activeProduct.rootComponent
+    chamfers = root.features.chamferFeatures
+    chamfer_input = chamfers.createInput(edges_to_chamfer, True)
+    chamfer_input.setToEqualDistance(adsk.core.ValueInput.createByReal(distance * get_fusion_unit_scale()))
+    chamfers.add(chamfer_input)
+    return "面取りを追加しました。"
+        
+def select_edges(body_name: str, edge_type: str='all', **kwargs):
+    target_body = find_entity_by_name(body_name)
+    if not target_body: raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    _ui.activeSelections.clear()
+    count = 0
+    for edge in target_body.edges:
+        if edge_type == 'all' or (edge_type == 'circular' and edge.geometry.curveType == adsk.core.Curve3DTypes.Circle3DCurveType):
+            _ui.activeSelections.add(edge)
+            count += 1
+    return f"{count}個のエッジを選択しました。"
+
+def combine_selection(operation: str, new_body_name: str=None, **kwargs):
+    selections = _ui.activeSelections
+    if selections.count < 2: return "結合するには少なくとも2つのボディを選択してください。"
+    bodies = [sel.entity for sel in selections if sel.entity.objectType == adsk.fusion.BRepBody.classType()]
+    if len(bodies) < 2: return "選択内にボディが2つ以上見つかりません。"
+    target_body = bodies[0]
+    tool_bodies = adsk.core.ObjectCollection.createWithArray(bodies[1:])
+    root = _app.activeProduct.rootComponent
+    combine_features = root.features.combineFeatures
+    combine_input = combine_features.createInput(target_body, tool_bodies)
+    op_map = {'join': adsk.fusion.FeatureOperations.JoinFeatureOperation, 'cut': adsk.fusion.FeatureOperations.CutFeatureOperation, 'intersect': adsk.fusion.FeatureOperations.IntersectFeatureOperation}
+    combine_input.operation = op_map.get(operation.lower())
+    result_feature = combine_features.add(combine_input)
+    if new_body_name and result_feature.bodies.count > 0:
+        result_feature.bodies.item(0).name = new_body_name
+        return result_feature.bodies.item(0).name
+    return f"選択したボディを{operation}操作で結合しました。"
+
+def combine_selection_all(operation: str='join', new_body_name: str=None, **kwargs):
+    return combine_selection(operation, new_body_name, **kwargs)
+
+def select_bodies(body_name1: str, body_name2: str, **kwargs):
+    _ui.activeSelections.clear()
+    body1 = find_entity_by_name(body_name1)
+    if body1: _ui.activeSelections.add(body1)
+    body2 = find_entity_by_name(body_name2)
+    if body2: _ui.activeSelections.add(body2)
+    return f"ボディ '{body_name1}' と '{body_name2}' を選択しました。"
+        
+def combine_by_name(target_body: str, tool_body: str, operation: str, new_body_name: str=None, **kwargs):
+    target = find_entity_by_name(target_body)
+    tool = find_entity_by_name(tool_body)
+    if not target or not tool: raise ValueError(f"ボディ '{target_body}' または '{tool_body}' が見つかりません。")
+    root = _app.activeProduct.rootComponent
+    combine_features = root.features.combineFeatures
+    combine_input = combine_features.createInput(target, adsk.core.ObjectCollection.createWithArray([tool]))
+    op_map = {'join': adsk.fusion.FeatureOperations.JoinFeatureOperation, 'cut': adsk.fusion.FeatureOperations.CutFeatureOperation, 'intersect': adsk.fusion.FeatureOperations.IntersectFeatureOperation}
+    combine_input.operation = op_map.get(operation.lower())
+    result_feature = combine_features.add(combine_input)
+    if new_body_name and result_feature.bodies.count > 0:
+        result_feature.bodies.item(0).name = new_body_name
+        return result_feature.bodies.item(0).name
+    return f"ボディを{operation}操作で結合しました。"
+
+def set_body_visibility(body_name: str, is_visible: bool):
+    target_body = find_entity_by_name(body_name)
+    if target_body:
+        target_body.isLightBulbOn = is_visible
+        return f"ボディ '{body_name}' の表示を{'On' if is_visible else 'Off'}にしました。"
+    else:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+
+def hide_body(body_name: str, **kwargs): return set_body_visibility(body_name, False)
+def show_body(body_name: str, **kwargs): return set_body_visibility(body_name, True)
+
+def move_by_name(body_name: str, x_dist: float=0, y_dist: float=0, z_dist: float=0, **kwargs):
+    target_entity = find_entity_by_name(body_name)
+    if not target_entity: raise ValueError(f"エンティティ '{body_name}' が見つかりません。")
+    scale = get_fusion_unit_scale()
+    vector = adsk.core.Vector3D.create(x_dist * scale, y_dist * scale, z_dist * scale)
+    transform = adsk.core.Matrix3D.create()
+    transform.translation = vector
+    root = _app.activeProduct.rootComponent
+    move_features = root.features.moveFeatures
+    move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([target_entity]), transform)
+    move_features.add(move_input)
+    return f"'{body_name}' を移動しました。"
+
+def rotate_by_name(body_name: str, axis: str='z', angle: float=90.0, cx: float=0, cy: float=0, cz: float=0, **kwargs):
+    target_entity = find_entity_by_name(body_name)
+    if not target_entity: raise ValueError(f"エンティティ '{body_name}' が見つかりません。")
+    scale = get_fusion_unit_scale()
+    axis_map = {'x': adsk.core.Vector3D.create(1, 0, 0), 'y': adsk.core.Vector3D.create(0, 1, 0), 'z': adsk.core.Vector3D.create(0, 0, 1)}
+    axis_vector = axis_map.get(axis.lower())
+    center_point = adsk.core.Point3D.create(cx * scale, cy * scale, cz * scale)
+    transform = adsk.core.Matrix3D.create()
+    transform.setToRotation(math.radians(angle), axis_vector, center_point)
+    root = _app.activeProduct.rootComponent
+    move_features = root.features.moveFeatures
+    move_input = move_features.createInput(adsk.core.ObjectCollection.createWithArray([target_entity]), transform)
+    move_features.add(move_input)
+    return f"'{body_name}' を回転しました。"
+
+def select_body(body_name: str, **kwargs):
+    target_body = find_entity_by_name(body_name)
+    if target_body:
+        _ui.activeSelections.clear()
+        _ui.activeSelections.add(target_body)
+        return f"ボディ '{body_name}' を選択しました。"
+    else:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+
+def select_all_bodies(**kwargs):
+    root = _app.activeProduct.rootComponent
+    if root.bRepBodies.count > 0:
+        _ui.activeSelections.clear()
+        for body in root.bRepBodies: _ui.activeSelections.add(body)
+        return f"{root.bRepBodies.count}個のボディをすべて選択しました。"
+    return "選択するボディがありません。"
+
+def select_all_features(**kwargs):
+    timeline = _app.activeProduct.timeline
+    if timeline.count > 0:
+        _ui.activeSelections.clear()
+        for item in timeline:
+            if item.entity: _ui.activeSelections.add(item.entity)
+        return f"{timeline.count}個のフィーチャを選択しました。"
+    return "選択するフィーチャがありません。"
+
+def delete_selection_features(**kwargs):
+    selections = _ui.activeSelections
+    count = selections.count
+    if count > 0:
+        entities = [sel.entity for sel in selections]
+        _ui.activeSelections.clear()
+        for entity in reversed(entities):
+            try:
+                if hasattr(entity, 'deleteMe') and entity.isValid: entity.deleteMe()
+            except: continue
+        return f"{count}個の選択フィーチャを削除しました。"
+    return "削除するフィーチャが選択されていません。"
+        
+def debug_coordinate_info(show_details: bool = True, **kwargs):
+    info_text = ""
+    info_text += f"Fusion 360 MCP Add-in\n"
+    info_text += f"Status: OK\nTimestamp: {time.ctime()}\n\n"
+    prefs = _app.preferences.generalPreferences
+    orientation_enum = prefs.defaultModelingOrientation
+    if orientation_enum == adsk.core.DefaultModelingOrientations.YUpModelingOrientation:
+        info_text += "  Setting: [WARNING] Y-axis is Up (Y-up).\n"
+        info_text += "  - Top      : +Y direction (XZ Plane)\n"
+        info_text += "  - Bottom   : -Y direction (XZ Plane)\n"
+        info_text += "  - Front    : +Z direction (XY Plane)\n"
+        info_text += "  - Back     : -Z direction (XY Plane)\n"
+        info_text += "  - Right    : +X direction (YZ Plane)\n"
+        info_text += "  - Left     : -X direction (YZ Plane)\n\n"
+        info_text += "  RECOMMENDATION: This tool is optimized for a Z-up orientation.\n"
+        info_text += "  For best results, please switch to 'Z-up' in Fusion 360's preferences.\n"
+        info_text += "  Maximum taper angle = arctan((base width - top width) / (2 x height))\n"
+        info_text += "  The maximum size of the fillet is wall thickness/2.\n"
+        info_text += "  Reviewing 3D CAD modeling considerations.\n"
+    else:
+            info_text += "  Setting: Z-axis is Up (Z-up)\n"
+            info_text += "  - Top      : +Z direction (XY Plane)\n"
+            info_text += "  - Bottom   : -Z direction (XY Plane)\n"
+            info_text += "  - Front    : -Y direction (XZ Plane)\n"
+            info_text += "  - Back     : +Y direction (XZ Plane)\n"
+            info_text += "  - Right    : +X direction (YZ Plane)\n"
+            info_text += "  - Left     : -X direction (YZ Plane)\n\n"
+            info_text += "  Please use this coordinate system for accurate positioning.\n"
+            info_text += "  Maximum taper angle = arctan((base width - top width) / (2 x height))\n"
+            info_text += "  The maximum size of the fillet is wall thickness/2.\n"
+            info_text += "  Reviewing 3D CAD modeling considerations.\n"
+    camera = _app.activeViewport.camera
+    up_vector = camera.upVector
+    info_text += f"\n現在のビューポートの上方向ベクトル: ({up_vector.x:.2f}, {up_vector.y:.2f}, {up_vector.z:.2f})\n"
+    if show_details:
+         info_text += "\n--- 詳細情報 ---\nInput Unit: mm\nInternal Unit: cm\n"
+         info_text += "修正内容: direction パラメータの処理を完全修正（Direction対応配置関数適用）\n"
+    log_debug("Debug info generated (Direction Complete Fixed version).")
+    return info_text       
+
+# --- ディスパッチャー ---
+COMMAND_MAP = {
+    'create_cube': create_cube, 'create_cylinder': create_cylinder, 'create_box': create_box,
+    'create_sphere': create_sphere, 'create_hemisphere': create_hemisphere, 'create_cone': create_cone,
+    'create_polygon_prism': create_polygon_prism, 'create_torus': create_torus, 'create_half_torus': create_half_torus,
+    'create_pipe': create_pipe, 'copy_body_symmetric': copy_body_symmetric, 'create_circular_pattern': create_circular_pattern,
+    'create_rectangular_pattern': create_rectangular_pattern, 'add_fillet': add_fillet, 'add_chamfer': add_chamfer,
+    'select_edges': select_edges, 'combine_selection': combine_selection, 'select_bodies': select_bodies,
+    'combine_by_name': combine_by_name, 'combine_selection_all': combine_selection_all, 'hide_body': hide_body,
+    'show_body': show_body, 'move_by_name': move_by_name, 'rotate_by_name': rotate_by_name,
+    'select_body': select_body, 'select_all_bodies': select_all_bodies, 'select_all_features': select_all_features,
+    'delete_selection_features': delete_selection_features, 'debug_coordinate_info': debug_coordinate_info,
+    'debug_body_placement': debug_body_placement,
+    'fusion:create_cube': create_cube, 'Fusion:create_cylinder': create_cylinder, 'Fusion:create_box': create_box,
+    'Fusion:create_sphere': create_sphere, 'Fusion:create_hemisphere': create_hemisphere, 'Fusion:create_cone': create_cone,
+    'Fusion:create_polygon_prism': create_polygon_prism, 'Fusion:create_torus': create_torus, 'Fusion:create_half_torus': create_half_torus,
+    'Fusion:create_pipe': create_pipe, 'Fusion:copy_body_symmetric': copy_body_symmetric, 'Fusion:create_circular_pattern': create_circular_pattern,
+    'Fusion:create_rectangular_pattern': create_rectangular_pattern, 'Fusion:add_fillet': add_fillet, 'Fusion:add_chamfer': add_chamfer,
+    'Fusion:select_edges': select_edges, 'Fusion:combine_selection': combine_selection, 'Fusion:select_bodies': select_bodies,
+    'Fusion:combine_by_name': combine_by_name, 'Fusion:combine_selection_all': combine_selection_all, 'Fusion:hide_body': hide_body,
+    'Fusion:show_body': show_body, 'Fusion:move_by_name': move_by_name, 'Fusion:rotate_by_name': rotate_by_name,
+    'Fusion:select_body': select_body, 'Fusion:select_all_bodies': select_all_bodies, 'Fusion:select_all_features': select_all_features,
+    'Fusion:delete_selection_features': delete_selection_features, 'Fusion:debug_coordinate_info': debug_coordinate_info,
+    'Fusion:debug_body_placement': debug_body_placement,
+    'create_polygon_sweep': create_polygon_sweep,'fusion:create_polygon_sweep': create_polygon_sweep,
+}
+
+def dispatch_command(command_name, params):
+    log_debug(f"Executing command: {command_name}")
+    func = COMMAND_MAP.get(command_name)
+    response_data = {}
+    try:
+        if func:
+            result = func(**params)
+            response_data['status'] = 'success'
+            response_data['result'] = result if result is not None else 'OK'
+        else:
+            raise ValueError(f"Unsupported command: {command_name}")
+
+    except Exception as e:
+        log_debug(f"Error executing '{command_name}': {traceback.format_exc()}")
+        response_data['status'] = 'error'
+        response_data['message'] = f"Failed to execute '{command_name}': {str(e)}"
+        response_data['traceback'] = traceback.format_exc()
+
+    finally:
+        try:
+            with open(_response_file_path, 'w', encoding='utf-8') as f:
+                json.dump(response_data, f, ensure_ascii=False, indent=4)
+            log_debug(f"Wrote response for {command_name} to file.")
+        except Exception as e:
+            log_debug(f"Failed to write response file: {traceback.format_exc()}")
+
+# --- イベントハンドラ ---
+class CommandReceivedEventHandler(adsk.core.CustomEventHandler):
+    def notify(self, args):
+        try:
+            if os.path.exists(_response_file_path):
+                with open(_response_file_path, 'w', encoding='utf-8') as f: f.truncate(0)
+            data = json.loads(args.additionalInfo)
+            command_name = data.get('command')
+            params = data.get('parameters', {})
+            if not _app.activeDocument: raise RuntimeError("アクティブなデザイン ドキュメントがありません。")
+
+            if command_name == 'execute_macro':
+                for cmd_item in params.get('commands', []):
+                    dispatch_command(cmd_item.get('tool_name'), cmd_item.get('arguments', {}))
+                
+                response = {'status': 'success', 'result': f"Macro with {len(params.get('commands',[]))} steps executed."}
+                with open(_response_file_path, 'w', encoding='utf-8') as f: json.dump(response, f, ensure_ascii=False, indent=4)
+            else:
+                dispatch_command(command_name, params)
+        except Exception as e:
+            error_response = {'status': 'error', 'message': 'Failed to process command event.', 'traceback': traceback.format_exc()}
+            try:
+                 with open(_response_file_path, 'w', encoding='utf-8') as f: json.dump(error_response, f, ensure_ascii=False, indent=4)
+            except: pass
+            log_debug(f'コマンド処理に失敗:\n{traceback.format_exc()}')
+
+# --- UIコマンドハンドラ ---
+class StartServerCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self): super().__init__()
+    def notify(self, args):
+        command = args.command; onExecute = StartServerExecuteHandler(); command.execute.add(onExecute); _handlers.append(onExecute)
+
+class StartServerExecuteHandler(adsk.core.CommandEventHandler):
+    def __init__(self): super().__init__()
+    def notify(self, args): start_server()
+
+class StopServerCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self): super().__init__()
+    def notify(self, args):
+        command = args.command; onExecute = StopServerExecuteHandler(); command.execute.add(onExecute); _handlers.append(onExecute)
+
+class StopServerExecuteHandler(adsk.core.CommandEventHandler):
+    def __init__(self): super().__init__()
+    def notify(self, args): stop_server()
+
+# --- ファイル監視とサーバー制御 ---
+def file_watcher(stop_event):
+    last_modified = 0
+    while not stop_event.is_set():
+        try:
+            if os.path.exists(_command_file_path):
+                modified = os.path.getmtime(_command_file_path)
+                if modified > last_modified:
+                    last_modified = modified
+                    with open(_command_file_path, 'r+', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            _app.fireCustomEvent(_command_received_event_id, content)
+                            f.seek(0)
+                            f.truncate()
+        except Exception as e:
+            log_debug(f"File watcher error: {traceback.format_exc()}")
+        time.sleep(0.5)
+
+def start_server():
+    global _is_running, _file_watcher_thread, _stop_flag, _command_received_event, _event_handler
+    if _is_running: return
+    try:
+        with open(_command_file_path, 'w', encoding='utf-8') as f: f.truncate(0)
+        with open(_response_file_path, 'w', encoding='utf-8') as f: f.truncate(0)
+        _command_received_event = _app.registerCustomEvent(_command_received_event_id)
+        _event_handler = CommandReceivedEventHandler()
+        _command_received_event.add(_event_handler)
+        _handlers.append(_event_handler)
+        _stop_flag = threading.Event()
+        _file_watcher_thread = threading.Thread(target=file_watcher, args=(_stop_flag,))
+        _file_watcher_thread.start()
+        _is_running = True
+        if _start_cmd_control: _start_cmd_control.isEnabled = False
+        if _stop_cmd_control: _stop_cmd_control.isEnabled = True
+        if _ui: _ui.messageBox('MCPサーバー連携を開始しました。')
+    except Exception as e:
+        if _ui: _ui.messageBox(f'サーバーの開始に失敗: {e}')
+
+def stop_server():
+    global _is_running, _file_watcher_thread, _stop_flag, _command_received_event, _event_handler
+    if not _is_running: return
+    try:
+        if _stop_flag: _stop_flag.set()
+        if _file_watcher_thread: _file_watcher_thread.join(timeout=2)
+        if _command_received_event and _event_handler in _handlers:
+            _command_received_event.remove(_event_handler)
+            _handlers.remove(_event_handler)
+        if _command_received_event and _app.unregisterCustomEvent(_command_received_event_id):
+            _command_received_event = None
+        _is_running = False
+        if _start_cmd_control: _start_cmd_control.isEnabled = True
+        if _stop_cmd_control: _stop_cmd_control.isEnabled = False
+        if _ui: _ui.messageBox('MCPサーバー連携を停止しました。')
+    except Exception as e:
+        if _ui: _ui.messageBox(f'サーバーの停止に失敗: {e}')
+
+# --- アドインのメインライフサイクル ---
+def run(context):
+    global _app, _ui, _start_cmd_def, _stop_cmd_def, _mcp_panel, _start_cmd_control, _stop_cmd_control, _handlers
+    _app = adsk.core.Application.get()
+    _ui  = _app.userInterface
+    _handlers = []
+    try:
+        ws = _ui.workspaces.itemById('FusionSolidEnvironment')
+        if not ws:
+            if _ui: _ui.messageBox('このアドインは「デザイン」ワークスペースで実行する必要があります。', 'MCPサーバー連携 エラー')
+            return
+        panel_id = 'MCPServerPanel'
+        _mcp_panel = ws.toolbarPanels.itemById(panel_id)
+        if _mcp_panel: _mcp_panel.deleteMe()
+        _mcp_panel = ws.toolbarPanels.add(panel_id, 'MCPサーバー連携', 'ScriptsManagerPanel', False)
+        start_cmd_id = 'StartMCPServerCmd'
+        _start_cmd_def = _ui.commandDefinitions.itemById(start_cmd_id)
+        if not _start_cmd_def: _start_cmd_def = _ui.commandDefinitions.addButtonDefinition(start_cmd_id, '連携開始', 'MCPサーバー連携を開始します。')
+        stop_cmd_id = 'StopMCPServerCmd'
+        _stop_cmd_def = _ui.commandDefinitions.itemById(stop_cmd_id)
+        if not _stop_cmd_def: _stop_cmd_def = _ui.commandDefinitions.addButtonDefinition(stop_cmd_id, '連携停止', 'MCPサーバー連携を停止します。')
+        onStartCreated = StartServerCreatedHandler()
+        _start_cmd_def.commandCreated.add(onStartCreated)
+        _handlers.append(onStartCreated)
+        onStopCreated = StopServerCreatedHandler()
+        _stop_cmd_def.commandCreated.add(onStopCreated)
+        _handlers.append(onStopCreated)
+        _start_cmd_control = _mcp_panel.controls.addCommand(_start_cmd_def)
+        _stop_cmd_control = _mcp_panel.controls.addCommand(_stop_cmd_def)
+        _start_cmd_control.isEnabled = True
+        _stop_cmd_control.isEnabled = False
+        _is_running = False
+    except:
+        if _ui: _ui.messageBox(f'アドインのロード中に予期せぬエラーが発生しました (run):\n{traceback.format_exc()}', 'MCPサーバー連携 エラー')
+
+def stop(context):
+    global _ui, _mcp_panel, _start_cmd_def, _stop_cmd_def
+    try:
+        if _is_running: stop_server()
+        if _mcp_panel: _mcp_panel.deleteMe()
+        if _start_cmd_def: _start_cmd_def.deleteMe()
+        if _stop_cmd_def: _stop_cmd_def.deleteMe()
+    except:
+        if _ui: _ui.messageBox(f'アドインのアンロード中に予期せぬエラーが発生しました (stop):\n{traceback.format_exc()}', 'MCPサーバー連携 エラー')
+        
