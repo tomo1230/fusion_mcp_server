@@ -969,6 +969,390 @@ def debug_coordinate_info(show_details: bool = True, **kwargs):
          info_text += "修正内容: direction パラメータの処理を完全修正（Direction対応配置関数適用）\n"
     log_debug("Debug info generated (Direction Complete Fixed version).")
     return info_text       
+# ボディ情報取得機能の追加コード
+# 既存のfusion_mcp_server.pyに追加する関数群
+
+def get_bounding_box(body_name: str, **kwargs):
+    """
+    指定したボディのバウンディングボックス情報を取得
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    bbox = body.boundingBox
+    scale = get_fusion_unit_scale()
+    
+    # mmに変換して返す
+    result = {
+        "min": {
+            "x": bbox.minPoint.x / scale,
+            "y": bbox.minPoint.y / scale,
+            "z": bbox.minPoint.z / scale
+        },
+        "max": {
+            "x": bbox.maxPoint.x / scale,
+            "y": bbox.maxPoint.y / scale,
+            "z": bbox.maxPoint.z / scale
+        },
+        "size": {
+            "width": (bbox.maxPoint.x - bbox.minPoint.x) / scale,
+            "height": (bbox.maxPoint.y - bbox.minPoint.y) / scale,
+            "depth": (bbox.maxPoint.z - bbox.minPoint.z) / scale
+        },
+        "center": {
+            "x": (bbox.minPoint.x + bbox.maxPoint.x) / 2 / scale,
+            "y": (bbox.minPoint.y + bbox.maxPoint.y) / 2 / scale,
+            "z": (bbox.minPoint.z + bbox.maxPoint.z) / 2 / scale
+        }
+    }
+    
+    log_debug(f"Bounding box for '{body_name}': {result}")
+    return result
+
+def get_body_center(body_name: str, **kwargs):
+    """
+    指定したボディの中心点情報を取得
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    bbox = body.boundingBox
+    mass_center = body.physicalProperties.centerOfMass
+    scale = get_fusion_unit_scale()
+    
+    result = {
+        "geometric_center": {
+            "x": (bbox.minPoint.x + bbox.maxPoint.x) / 2 / scale,
+            "y": (bbox.minPoint.y + bbox.maxPoint.y) / 2 / scale,
+            "z": (bbox.minPoint.z + bbox.maxPoint.z) / 2 / scale
+        },
+        "mass_center": {
+            "x": mass_center.x / scale,
+            "y": mass_center.y / scale,
+            "z": mass_center.z / scale
+        },
+        "bounding_center": {
+            "x": (bbox.minPoint.x + bbox.maxPoint.x) / 2 / scale,
+            "y": (bbox.minPoint.y + bbox.maxPoint.y) / 2 / scale,
+            "z": (bbox.minPoint.z + bbox.maxPoint.z) / 2 / scale
+        }
+    }
+    
+    log_debug(f"Centers for '{body_name}': {result}")
+    return result
+
+def get_body_dimensions(body_name: str, **kwargs):
+    """
+    指定したボディの詳細寸法情報を取得
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    bbox = body.boundingBox
+    scale = get_fusion_unit_scale()
+    
+    # 物理プロパティから体積と表面積を取得
+    try:
+        volume_cm3 = body.physicalProperties.volume
+        area_cm2 = body.physicalProperties.area
+        volume_mm3 = volume_cm3 * 1000  # cm³ to mm³
+        area_mm2 = area_cm2 * 100       # cm² to mm²
+    except:
+        volume_mm3 = 0
+        area_mm2 = 0
+    
+    result = {
+        "length": (bbox.maxPoint.x - bbox.minPoint.x) / scale,
+        "width": (bbox.maxPoint.y - bbox.minPoint.y) / scale,
+        "height": (bbox.maxPoint.z - bbox.minPoint.z) / scale,
+        "volume": volume_mm3,
+        "surface_area": area_mm2
+    }
+    
+    log_debug(f"Dimensions for '{body_name}': {result}")
+    return result
+
+def get_faces_info(body_name: str, **kwargs):
+    """
+    指定したボディの面情報を取得
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    scale = get_fusion_unit_scale()
+    faces_info = []
+    
+    for i, face in enumerate(body.faces):
+        try:
+            face_data = {
+                "id": f"face_{i+1}",
+                "area": face.area * 100,  # cm² to mm²
+            }
+            
+            # 面のタイプを判定
+            geom = face.geometry
+            if geom.objectType == adsk.core.Plane.classType():
+                face_data["type"] = "planar"
+                face_data["normal"] = {
+                    "x": geom.normal.x,
+                    "y": geom.normal.y,
+                    "z": geom.normal.z
+                }
+                face_data["center"] = {
+                    "x": geom.origin.x / scale,
+                    "y": geom.origin.y / scale,
+                    "z": geom.origin.z / scale
+                }
+            elif geom.objectType == adsk.core.Cylinder.classType():
+                face_data["type"] = "cylindrical"
+                face_data["radius"] = geom.radius / scale
+                face_data["axis"] = {
+                    "x": geom.axis.x,
+                    "y": geom.axis.y,
+                    "z": geom.axis.z
+                }
+            elif geom.objectType == adsk.core.Sphere.classType():
+                face_data["type"] = "spherical"
+                face_data["radius"] = geom.radius / scale
+                face_data["center"] = {
+                    "x": geom.origin.x / scale,
+                    "y": geom.origin.y / scale,
+                    "z": geom.origin.z / scale
+                }
+            elif geom.objectType == adsk.core.Cone.classType():
+                face_data["type"] = "conical"
+                face_data["radius"] = geom.radius / scale
+                face_data["half_angle"] = math.degrees(geom.halfAngle)
+            else:
+                face_data["type"] = "other"
+            
+            faces_info.append(face_data)
+            
+        except Exception as e:
+            log_debug(f"Error processing face {i}: {e}")
+            faces_info.append({
+                "id": f"face_{i+1}",
+                "type": "error",
+                "error": str(e)
+            })
+    
+    log_debug(f"Found {len(faces_info)} faces for '{body_name}'")
+    return faces_info
+
+def get_edges_info(body_name: str, **kwargs):
+    """
+    指定したボディのエッジ情報を取得
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    scale = get_fusion_unit_scale()
+    edges_info = []
+    
+    for i, edge in enumerate(body.edges):
+        try:
+            edge_data = {
+                "id": f"edge_{i+1}",
+                "length": edge.length / scale
+            }
+            
+            # エッジのタイプを判定
+            geom = edge.geometry
+            if geom.curveType == adsk.core.Curve3DTypes.Line3DCurveType:
+                edge_data["type"] = "line"
+                edge_data["start_point"] = {
+                    "x": geom.startPoint.x / scale,
+                    "y": geom.startPoint.y / scale,
+                    "z": geom.startPoint.z / scale
+                }
+                edge_data["end_point"] = {
+                    "x": geom.endPoint.x / scale,
+                    "y": geom.endPoint.y / scale,
+                    "z": geom.endPoint.z / scale
+                }
+                direction = geom.startPoint.vectorTo(geom.endPoint)
+                direction.normalize()
+                edge_data["direction"] = {
+                    "x": direction.x,
+                    "y": direction.y,
+                    "z": direction.z
+                }
+            elif geom.curveType == adsk.core.Curve3DTypes.Circle3DCurveType:
+                edge_data["type"] = "circle"
+                edge_data["radius"] = geom.radius / scale
+                edge_data["center"] = {
+                    "x": geom.center.x / scale,
+                    "y": geom.center.y / scale,
+                    "z": geom.center.z / scale
+                }
+                edge_data["normal"] = {
+                    "x": geom.normal.x,
+                    "y": geom.normal.y,
+                    "z": geom.normal.z
+                }
+            elif geom.curveType == adsk.core.Curve3DTypes.Arc3DCurveType:
+                edge_data["type"] = "arc"
+                edge_data["radius"] = geom.radius / scale
+                edge_data["center"] = {
+                    "x": geom.center.x / scale,
+                    "y": geom.center.y / scale,
+                    "z": geom.center.z / scale
+                }
+                edge_data["start_angle"] = math.degrees(geom.startAngle)
+                edge_data["end_angle"] = math.degrees(geom.endAngle)
+            else:
+                edge_data["type"] = "spline"
+            
+            edges_info.append(edge_data)
+            
+        except Exception as e:
+            log_debug(f"Error processing edge {i}: {e}")
+            edges_info.append({
+                "id": f"edge_{i+1}",
+                "type": "error",
+                "error": str(e)
+            })
+    
+    log_debug(f"Found {len(edges_info)} edges for '{body_name}'")
+    return edges_info
+
+def get_mass_properties(body_name: str, material_density: float = 1.0, **kwargs):
+    """
+    指定したボディの質量特性を取得
+    material_density: 材料密度 (g/cm³)
+    """
+    body = find_entity_by_name(body_name)
+    if not body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    
+    scale = get_fusion_unit_scale()
+    props = body.physicalProperties
+    
+    # 体積をcm³からmm³に変換
+    volume_mm3 = props.volume * 1000
+    
+    # 質量を計算 (密度 g/cm³ × 体積 cm³ = 質量 g)
+    mass_g = material_density * props.volume
+    
+    result = {
+        "volume": volume_mm3,
+        "mass": mass_g,
+        "center_of_mass": {
+            "x": props.centerOfMass.x / scale,
+            "y": props.centerOfMass.y / scale,
+            "z": props.centerOfMass.z / scale
+        },
+        "moments_of_inertia": {
+            "Ixx": props.principalMomentsOfInertia.x,
+            "Iyy": props.principalMomentsOfInertia.y,
+            "Izz": props.principalMomentsOfInertia.z
+        },
+        "material_density": material_density
+    }
+    
+    log_debug(f"Mass properties for '{body_name}': volume={volume_mm3:.2f}mm³, mass={mass_g:.2f}g")
+    return result
+
+def get_body_relationships(body_name: str, other_body_name: str, **kwargs):
+    """
+    2つのボディ間の位置関係を取得
+    """
+    body1 = find_entity_by_name(body_name)
+    body2 = find_entity_by_name(other_body_name)
+    
+    if not body1:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+    if not body2:
+        raise ValueError(f"ボディ '{other_body_name}' が見つかりません。")
+    
+    scale = get_fusion_unit_scale()
+    
+    # 重心間の距離を計算
+    center1 = body1.physicalProperties.centerOfMass
+    center2 = body2.physicalProperties.centerOfMass
+    distance = center1.distanceTo(center2) / scale
+    
+    # バウンディングボックス情報
+    bbox1 = body1.boundingBox
+    bbox2 = body2.boundingBox
+    
+    # 簡易的な干渉チェック（バウンディングボックスベース）
+    interference = (
+        bbox1.minPoint.x <= bbox2.maxPoint.x and bbox1.maxPoint.x >= bbox2.minPoint.x and
+        bbox1.minPoint.y <= bbox2.maxPoint.y and bbox1.maxPoint.y >= bbox2.minPoint.y and
+        bbox1.minPoint.z <= bbox2.maxPoint.z and bbox1.maxPoint.z >= bbox2.minPoint.z
+    )
+    
+    # 相対位置の判定
+    relative_position = "unknown"
+    if center1.z > bbox2.maxPoint.z:
+        relative_position = "above"
+    elif center1.z < bbox2.minPoint.z:
+        relative_position = "below"
+    elif center1.x > bbox2.maxPoint.x:
+        relative_position = "right"
+    elif center1.x < bbox2.minPoint.x:
+        relative_position = "left"
+    elif center1.y > bbox2.maxPoint.y:
+        relative_position = "back"
+    elif center1.y < bbox2.minPoint.y:
+        relative_position = "front"
+    else:
+        relative_position = "overlapping"
+    
+    result = {
+        "distance": distance,
+        "interference": interference,
+        "relative_position": relative_position,
+        "clearance": distance if not interference else 0
+    }
+    
+    log_debug(f"Relationship between '{body_name}' and '{other_body_name}': {result}")
+    return result
+
+def measure_distance(body_name1: str, body_name2: str, **kwargs):
+    """
+    2つのボディ間の最短距離を測定
+    """
+    body1 = find_entity_by_name(body_name1)
+    body2 = find_entity_by_name(body_name2)
+    
+    if not body1:
+        raise ValueError(f"ボディ '{body_name1}' が見つかりません。")
+    if not body2:
+        raise ValueError(f"ボディ '{body_name2}' が見つかりません。")
+    
+    scale = get_fusion_unit_scale()
+    
+    # 重心間距離を計算
+    center1 = body1.physicalProperties.centerOfMass
+    center2 = body2.physicalProperties.centerOfMass
+    center_distance = center1.distanceTo(center2) / scale
+    
+    # バウンディングボックス間の最短距離を計算
+    bbox1 = body1.boundingBox
+    bbox2 = body2.boundingBox
+    
+    # 各軸での最短距離を計算
+    dx = max(0, max(bbox1.minPoint.x - bbox2.maxPoint.x, bbox2.minPoint.x - bbox1.maxPoint.x))
+    dy = max(0, max(bbox1.minPoint.y - bbox2.maxPoint.y, bbox2.minPoint.y - bbox1.maxPoint.y))
+    dz = max(0, max(bbox1.minPoint.z - bbox2.maxPoint.z, bbox2.minPoint.z - bbox1.maxPoint.z))
+    
+    bbox_distance = math.sqrt(dx*dx + dy*dy + dz*dz) / scale
+    
+    result = {
+        "center_to_center": center_distance,
+        "bounding_box_clearance": bbox_distance,
+        "is_overlapping": bbox_distance == 0
+    }
+    
+    log_debug(f"Distance between '{body_name1}' and '{body_name2}': {result}")
+    return result
 
 # --- ディスパッチャー ---
 COMMAND_MAP = {
@@ -983,18 +1367,36 @@ COMMAND_MAP = {
     'select_body': select_body, 'select_all_bodies': select_all_bodies, 'select_all_features': select_all_features,
     'delete_selection_features': delete_selection_features, 'debug_coordinate_info': debug_coordinate_info,
     'debug_body_placement': debug_body_placement,
-    'fusion:create_cube': create_cube, 'Fusion:create_cylinder': create_cylinder, 'Fusion:create_box': create_box,
-    'Fusion:create_sphere': create_sphere, 'Fusion:create_hemisphere': create_hemisphere, 'Fusion:create_cone': create_cone,
-    'Fusion:create_polygon_prism': create_polygon_prism, 'Fusion:create_torus': create_torus, 'Fusion:create_half_torus': create_half_torus,
-    'Fusion:create_pipe': create_pipe, 'Fusion:copy_body_symmetric': copy_body_symmetric, 'Fusion:create_circular_pattern': create_circular_pattern,
-    'Fusion:create_rectangular_pattern': create_rectangular_pattern, 'Fusion:add_fillet': add_fillet, 'Fusion:add_chamfer': add_chamfer,
-    'Fusion:select_edges': select_edges, 'Fusion:combine_selection': combine_selection, 'Fusion:select_bodies': select_bodies,
-    'Fusion:combine_by_name': combine_by_name, 'Fusion:combine_selection_all': combine_selection_all, 'Fusion:hide_body': hide_body,
-    'Fusion:show_body': show_body, 'Fusion:move_by_name': move_by_name, 'Fusion:rotate_by_name': rotate_by_name,
-    'Fusion:select_body': select_body, 'Fusion:select_all_bodies': select_all_bodies, 'Fusion:select_all_features': select_all_features,
-    'Fusion:delete_selection_features': delete_selection_features, 'Fusion:debug_coordinate_info': debug_coordinate_info,
-    'Fusion:debug_body_placement': debug_body_placement,
-    'create_polygon_sweep': create_polygon_sweep,'fusion:create_polygon_sweep': create_polygon_sweep,
+    'create_polygon_sweep': create_polygon_sweep,
+    'get_bounding_box': get_bounding_box,
+    'get_body_center': get_body_center,
+    'get_body_dimensions': get_body_dimensions,
+    'get_faces_info': get_faces_info,
+    'get_edges_info': get_edges_info,
+    'get_mass_properties': get_mass_properties,
+    'get_body_relationships': get_body_relationships,
+    'measure_distance': measure_distance,
+    # Fusion:プレフィックス付きバージョン
+    'fusion:create_cube': create_cube, 'fusion:create_cylinder': create_cylinder, 'fusion:create_box': create_box,
+    'fusion:create_sphere': create_sphere, 'fusion:create_hemisphere': create_hemisphere, 'fusion:create_cone': create_cone,
+    'fusion:create_polygon_prism': create_polygon_prism, 'fusion:create_torus': create_torus, 'fusion:create_half_torus': create_half_torus,
+    'fusion:create_pipe': create_pipe, 'fusion:copy_body_symmetric': copy_body_symmetric, 'fusion:create_circular_pattern': create_circular_pattern,
+    'fusion:create_rectangular_pattern': create_rectangular_pattern, 'fusion:add_fillet': add_fillet, 'fusion:add_chamfer': add_chamfer,
+    'fusion:select_edges': select_edges, 'fusion:combine_selection': combine_selection, 'fusion:select_bodies': select_bodies,
+    'fusion:combine_by_name': combine_by_name, 'fusion:combine_selection_all': combine_selection_all, 'fusion:hide_body': hide_body,
+    'fusion:show_body': show_body, 'fusion:move_by_name': move_by_name, 'fusion:rotate_by_name': rotate_by_name,
+    'fusion:select_body': select_body, 'fusion:select_all_bodies': select_all_bodies, 'fusion:select_all_features': select_all_features,
+    'fusion:delete_selection_features': delete_selection_features, 'fusion:debug_coordinate_info': debug_coordinate_info,
+    'fusion:debug_body_placement': debug_body_placement,
+    'fusion:create_polygon_sweep': create_polygon_sweep,
+    'fusion:get_bounding_box': get_bounding_box,
+    'fusion:get_body_center': get_body_center,
+    'fusion:get_body_dimensions': get_body_dimensions,
+    'fusion:get_faces_info': get_faces_info,
+    'fusion:get_edges_info': get_edges_info,
+    'fusion:get_mass_properties': get_mass_properties,
+    'fusion:get_body_relationships': get_body_relationships,
+    'fusion:measure_distance': measure_distance,
 }
 
 def dispatch_command(command_name, params):
