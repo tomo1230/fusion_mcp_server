@@ -958,7 +958,7 @@ def debug_coordinate_info(show_details: bool = True, **kwargs):
             info_text += "  - Right    : +X direction (YZ Plane)\n"
             info_text += "  - Left     : -X direction (YZ Plane)\n\n"
             info_text += "  Please use this coordinate system for accurate positioning.\n"
-            info_text += "  Maximum taper angle = arctan((base width - top width) / (2 x height))\n"
+            info_text += "  Taper angle calculation formula : Maximum taper angle = arctan((base width - top width) / (2 x height))\n"
             info_text += "  The maximum size of the fillet is wall thickness/2.\n"
             info_text += "  Reviewing 3D CAD modeling considerations.\n"
     camera = _app.activeViewport.camera
