@@ -53,6 +53,28 @@ def get_construction_plane(root: adsk.fusion.Component, plane_str: str):
     plane_map = {'yz': root.yZConstructionPlane, 'xz': root.xZConstructionPlane, 'xy': root.xYConstructionPlane}
     return plane_map.get(str(plane_str).lower(), root.xYConstructionPlane)
 
+# ▼▼▼【新規追加】ボディ名の一意性を保証するヘルパー関数 ▼▼▼
+def get_unique_body_name(root: adsk.fusion.Component, base_name: str) -> str:
+    """
+    指定されたベース名から一意のボディ名を生成します。
+    同名が存在する場合、'_2', '_3' のようにサフィックスを追加します。
+    """
+    if not base_name:
+        base_name = "Body"
+
+    existing_names = {body.name for body in root.bRepBodies}
+    
+    if base_name not in existing_names:
+        return base_name
+    
+    counter = 2
+    while True:
+        new_name = f"{base_name}_{counter}"
+        if new_name not in existing_names:
+            return new_name
+        counter += 1
+# ▲▲▲【新規追加】ここまで ▲▲▲
+
 def move_body_to_absolute_position(body: adsk.fusion.BRepBody, target_cm_pt: adsk.core.Point3D):
     if not body: return
     current_center_pt = body.physicalProperties.centerOfMass
@@ -78,25 +100,20 @@ def move_body_with_placement(body, cx_cm, cy_cm, cz_cm, z_placement, x_placement
     scale = get_fusion_unit_scale()
 
     log_debug(f"Intuitive placement: z_placement={z_placement}, x_placement={x_placement}, y_placement={y_placement}")
-    log_debug(f"  - Original centroid (mm): ({current_centroid.x/scale:.2f}, {current_centroid.y/scale:.2f}, {current_centroid.z/scale:.2f})")
-    log_debug(f"  - Target coordinate (mm): ({cx_cm/scale:.2f}, {cy_cm/scale:.2f}, {cz_cm/scale:.2f})")
     # Note: 'direction' パラメータは、配置ロジックの直感性を高めるために意図的に無視されます。
 
     # Z軸方向の配置計算 (改善版：押し出し方向に依存しない直感的なロジック)
     if z_placement == 'bottom':
         # 常にボディの底面 (min Z) が cz に揃うように移動
         target_centroid_z = cz_cm + (current_centroid.z - bbox.minPoint.z)
-        log_debug(f"  - Z-Align (bottom): Aligning body's bottom to Z={cz_cm/scale:.2f}mm -> Target Centroid Z={target_centroid_z/scale:.2f}mm")
     elif z_placement == 'top':
         # 常にボディの上面 (max Z) が cz に揃うように移動
         target_centroid_z = cz_cm + (current_centroid.z - bbox.maxPoint.z)
-        log_debug(f"  - Z-Align (top): Aligning body's top to Z={cz_cm/scale:.2f}mm -> Target Centroid Z={target_centroid_z/scale:.2f}mm")
     else:  # center
         # 常にボディの重心が cz に揃うように移動
         target_centroid_z = cz_cm
-        log_debug(f"  - Z-Align (center): Aligning body's centroid to Z={cz_cm/scale:.2f}mm")
 
-    # X軸方向の配置計算（既存のロジックは直感的なため変更なし）
+    # X軸方向の配置計算
     if x_placement == 'left':
         target_centroid_x = cx_cm + (current_centroid.x - bbox.minPoint.x)
     elif x_placement == 'right':
@@ -104,18 +121,15 @@ def move_body_with_placement(body, cx_cm, cy_cm, cz_cm, z_placement, x_placement
     else:  # center
         target_centroid_x = cx_cm
 
-    # Y軸方向の配置計算（既存のロジックは直感的なため変更なし）
-    if y_placement == 'front': # Fusion 360の座標系では、-Yが手前(Front)
+    # Y軸方向の配置計算 (Fusion 360座標系: -YがFront, +YがBack)
+    if y_placement == 'front':
         target_centroid_y = cy_cm + (current_centroid.y - bbox.minPoint.y)
-    elif y_placement == 'back': # +Yが奥(Back)
+    elif y_placement == 'back':
         target_centroid_y = cy_cm + (current_centroid.y - bbox.maxPoint.y)
     else:  # center
         target_centroid_y = cy_cm
-
-    # 計算された目標位置に移動
+    
     target_point = adsk.core.Point3D.create(target_centroid_x, target_centroid_y, target_centroid_z)
-    log_debug(f"  - Move Execution: Target centroid (mm): ({target_centroid_x/scale:.2f}, {target_centroid_y/scale:.2f}, {target_centroid_z/scale:.2f})")
-
     move_body_to_absolute_position(body, target_point)
 
 def find_entity_by_name(name: str):
@@ -127,9 +141,6 @@ def find_entity_by_name(name: str):
 
 # --- デバッグ用関数 ---
 def debug_body_placement(body_name: str, **kwargs):
-    """
-    ボディの配置情報を詳細表示するデバッグ関数
-    """
     body = find_entity_by_name(body_name)
     if not body:
         return f"ボディ '{body_name}' が見つかりません。"
@@ -169,21 +180,15 @@ def create_cube(size: float=50, body_name: str=None, plane: str='xy', cx: float=
     extrudes = root.features.extrudeFeatures
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
     distance = adsk.core.ValueInput.createByReal(size_cm)
-    
-    # Direction処理
     if direction.lower() == 'positive':
-        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+        ext_input.setDistanceExtent(False, distance)
     else:
-        # negativeの場合は、逆方向の押し出しを実現
         extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
         ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
-    
-    # テーパー角度の処理
     if taper_angle != 0:
         final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
         taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
         ext_input.taperAngle = taper_angle_input
-    
     extrude_feature = extrudes.add(ext_input)
     new_body = extrude_feature.bodies.item(0)
     sketch.isVisible = False
@@ -191,7 +196,8 @@ def create_cube(size: float=50, body_name: str=None, plane: str='xy', cx: float=
     # 【重要】Direction対応修正版の配置関数を使用
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
     
-    if body_name: new_body.name = body_name
+    if body_name:
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
 
 def create_cylinder(radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
@@ -205,21 +211,15 @@ def create_cylinder(radius: float=25, height: float=50, body_name: str=None, pla
     extrudes = root.features.extrudeFeatures
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
     distance = adsk.core.ValueInput.createByReal(height_cm)
-    
-    # Direction処理
     if direction.lower() == 'positive':
-        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+        ext_input.setDistanceExtent(False, distance)
     else:
-        # negativeの場合は、逆方向の押し出しを実現
         extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
         ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
-    
-    # テーパー角度の処理
     if taper_angle != 0:
         final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
         taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
         ext_input.taperAngle = taper_angle_input
-    
     extrude_feature = extrudes.add(ext_input)
     new_body = extrude_feature.bodies.item(0)
     sketch.isVisible = False
@@ -227,7 +227,8 @@ def create_cylinder(radius: float=25, height: float=50, body_name: str=None, pla
     # 【重要】Direction対応修正版の配置関数を使用
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
     
-    if body_name: new_body.name = body_name
+    if body_name:
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
 
 def create_box(width: float=50, depth: float=30, height: float=20, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
@@ -241,28 +242,21 @@ def create_box(width: float=50, depth: float=30, height: float=20, body_name: st
     extrudes = root.features.extrudeFeatures
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
     distance = adsk.core.ValueInput.createByReal(height_cm)
-    
-    # Direction処理
     if direction.lower() == 'positive':
-        ext_input.setDistanceExtent(False, distance)  # 非対称、+Z方向
+        ext_input.setDistanceExtent(False, distance)
     else:
-        # negativeの場合は、逆方向の押し出しを実現
         extent_definition = adsk.fusion.DistanceExtentDefinition.create(distance)
         ext_input.setOneSideExtent(extent_definition, adsk.fusion.ExtentDirections.NegativeExtentDirection)
-    
-    # テーパー角度の処理
     if taper_angle != 0:
         final_taper = abs(taper_angle) * (-1 if taper_direction.lower() == 'inward' else 1)
         taper_angle_input = adsk.core.ValueInput.createByString(f"{final_taper} deg")
         ext_input.taperAngle = taper_angle_input
-    
     new_body = extrudes.add(ext_input).bodies.item(0)
     sketch.isVisible = False
-    
-    # 配置関数を使用
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
     
-    if body_name: new_body.name = body_name
+    if body_name:
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
 
 def create_sphere(radius: float=25, body_name: str=None, cx: float=0, cy: float=0, cz: float=0, **kwargs):
@@ -282,7 +276,7 @@ def create_sphere(radius: float=25, body_name: str=None, cx: float=0, cy: float=
     new_body = revolves.add(revolve_input).bodies.item(0)
     sketch.isVisible = False
     move_body_to_absolute_position(new_body, adsk.core.Point3D.create(cx_cm, cy_cm, cz_cm))
-    if body_name: new_body.name = body_name
+    if body_name: new_body.name = get_unique_body_name(root, body_name)
     return new_body.name
 
 def create_hemisphere(radius: float=25, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, orientation: str='positive', z_placement: str='bottom', x_placement: str='center', y_placement: str='center', **kwargs):
@@ -311,7 +305,7 @@ def create_hemisphere(radius: float=25, body_name: str=None, plane: str='xy', cx
         move_features.add(move_input)
         adsk.doEvents()
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # hemisphereにはdirectionパラメータなし
-    if body_name: new_body.name = body_name
+    if body_name: new_body.name = get_unique_body_name(root, body_name)
     return new_body.name
 
 def create_cone(radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', **kwargs):
@@ -344,7 +338,7 @@ def create_cone(radius: float=25, height: float=50, body_name: str=None, plane: 
         move_features.add(move_input)
         adsk.doEvents()
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # coneにはdirectionパラメータなし
-    if body_name: new_body.name = body_name
+    if body_name: new_body.name = get_unique_body_name(root, body_name)
     return new_body.name
         
 def create_polygon_prism(num_sides: int=6, radius: float=25, height: float=50, body_name: str=None, plane: str='xy', cx: float=0, cy: float=0, cz: float=0, z_placement: str='center', x_placement: str='center', y_placement: str='center', taper_angle: float=0, taper_direction: str='inward', direction: str='positive', **kwargs):
@@ -383,7 +377,7 @@ def create_polygon_prism(num_sides: int=6, radius: float=25, height: float=50, b
     # 配置関数を使用
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, direction)
     
-    if body_name: new_body.name = body_name
+    if body_name: new_body.name = get_unique_body_name(root, body_name)
     return new_body.name
         
 def create_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane='xy', z_placement='center', x_placement='center', y_placement='center', body_name=None, **kwargs):
@@ -425,7 +419,7 @@ def create_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane='xy',
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')  # torusにはdirectionパラメータなし
     
     if body_name:
-        new_body.name = body_name
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
 
 def create_half_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane='xy', z_placement='center', x_placement='center', y_placement='center', body_name=None, orientation: str='back', plane_rotation_angle: float=0, opening_extrude_distance: float=0, **kwargs):
@@ -507,7 +501,7 @@ def create_half_torus(major_radius=30, minor_radius=10, cx=0, cy=0, cz=0, plane=
             log_debug(f"Warning: Expected 2 planar faces for extrusion, but found {extrude_faces.count}. Skipping extrusion.")
 
     if body_name:
-        new_body.name = body_name
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
     
 def create_pipe(x1: float=0, y1: float=0, z1: float=0, x2: float=50, y2: float=0, z2: float=50, radius: float=5, body_name: str=None, **kwargs):
@@ -571,7 +565,7 @@ def create_pipe(x1: float=0, y1: float=0, z1: float=0, x2: float=50, y2: float=0
         move_features.add(move_input2)
     
     if body_name:
-        new_body.name = body_name
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     
     return new_body.name
 
@@ -684,7 +678,7 @@ def create_polygon_sweep(cx=0, cy=0, cz=0, path_radius=30, sweep_angle=360,
     move_body_with_placement(new_body, cx_cm, cy_cm, cz_cm, z_placement, x_placement, y_placement, 'positive')
 
     if body_name:
-        new_body.name = body_name
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     
     log_debug(f"Polygon sweep created successfully with {twist_rotations} rotations (twist_angle: {twist_angle} degrees)")
     return new_body.name
@@ -695,42 +689,45 @@ def copy_body_symmetric(source_body_name: str, new_body_name: str, plane: str = 
     root = _app.activeProduct.rootComponent
     mirror_features = root.features.mirrorFeatures
     mirror_input = mirror_features.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), get_construction_plane(root, plane))
-    mirror_input.pattern_type = 0
+    mirror_input.pattern_type = 0 # 0 = Body Pattern
     new_body = mirror_features.add(mirror_input).bodies.item(0)
-    if new_body_name: new_body.name = new_body_name
+    if new_body_name:
+        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
     return new_body.name
-        
+
 def create_circular_pattern(source_body_name: str, axis: str = 'z', quantity: int = 4, angle: float = 360.0, new_body_base_name: str = None, **kwargs):
     source_body = find_entity_by_name(source_body_name)
     if not source_body: raise ValueError(f"ボディ '{source_body_name}' が見つかりません。")
     root = _app.activeProduct.rootComponent
-    bodies_before = {b.name for b in root.bRepBodies}
     axis_map = {'x': root.xConstructionAxis, 'y': root.yConstructionAxis, 'z': root.zConstructionAxis}
     rotation_axis = axis_map.get(axis.lower())
     if not rotation_axis: raise ValueError(f"無効な軸: {axis}")
     circular_patterns = root.features.circularPatternFeatures
     pattern_input = circular_patterns.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), rotation_axis)
+    pattern_input.quantity = adsk.core.ValueInput.createByReal(quantity)
     if angle == 360.0:
         pattern_input.isFull = True
     else:
         pattern_input.isFull = False
-    pattern_input.quantity = adsk.core.ValueInput.createByReal(quantity)
-    pattern_input.totalAngle = adsk.core.ValueInput.createByString(f"{angle} deg")
-    pattern_input.pattern_type = 0
-    circular_patterns.add(pattern_input)
+        pattern_input.totalAngle = adsk.core.ValueInput.createByString(f"{angle} deg")
+    pattern_input.pattern_type = 0 # 0 = Body Pattern
+
+    #【修正】堅牢なロジックに変更
+    pattern_feature = circular_patterns.add(pattern_input)
     if new_body_base_name:
-        new_body_index = 1
-        for body in root.bRepBodies:
-            if body.name not in bodies_before:
-                body.name = f"{new_body_base_name}_{new_body_index}"
-                new_body_index += 1; bodies_before.add(body.name)
+        # パターン機能から直接新しいボディを取得（高速・確実）
+        newly_created_bodies = pattern_feature.bodies
+        for i, body in enumerate(newly_created_bodies):
+            # 新しいボディそれぞれに一意な名前を生成して付与
+            unique_name = get_unique_body_name(root, f"{new_body_base_name}_{i+1}")
+            body.name = unique_name
+            
     return f"{quantity}個の円形状パターンを作成しました。"
-        
-def create_rectangular_pattern(source_body_name: str, distance_type: str='spacing', quantity_one: int=2, distance_one: float=10.0, direction_one_axis: str='x', direction_one_type: str='one_direction', quantity_two: int=1, distance_two: float=10.0, direction_two_axis: str='y', direction_two_type: str='one_direction', new_body_base_name: str=None, **kwargs):
+
+def create_rectangular_pattern(source_body_name: str, distance_type: str='spacing', quantity_one: int=2, distance_one: float=10.0, direction_one_axis: str='x', quantity_two: int=1, distance_two: float=10.0, direction_two_axis: str='y', new_body_base_name: str=None, **kwargs):
     source_body = find_entity_by_name(source_body_name)
     if not source_body: raise ValueError(f"ボディ '{source_body_name}' が見つかりません。")
     root = _app.activeProduct.rootComponent
-    bodies_before = {b.name for b in root.bRepBodies}
     scale = get_fusion_unit_scale()
     axis_map = {'x': root.xConstructionAxis, 'y': root.yConstructionAxis, 'z': root.zConstructionAxis}
     dir_one = axis_map.get(direction_one_axis.lower())
@@ -738,61 +735,110 @@ def create_rectangular_pattern(source_body_name: str, distance_type: str='spacin
     rect_patterns = root.features.rectangularPatternFeatures
     dist_type_enum = adsk.fusion.PatternDistanceType.ExtentPatternDistanceType if distance_type.lower() == 'extent' else adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
     pattern_input = rect_patterns.createInput(adsk.core.ObjectCollection.createWithArray([source_body]), dir_one, adsk.core.ValueInput.createByReal(quantity_one), adsk.core.ValueInput.createByReal(distance_one * scale), dist_type_enum)
-    try:
-        pattern_input.directionOnePatternType = adsk.fusion.PatternDirectionOptions.SymmetricPatternDirection if direction_one_type.lower() == 'symmetric' else adsk.fusion.PatternDirectionOptions.OneDirectionPatternDirection
-        if quantity_two > 1 and dir_two:
-             pattern_input.directionTwoPatternType = adsk.fusion.PatternDirectionOptions.SymmetricPatternDirection if direction_two_type.lower() == 'symmetric' else adsk.fusion.PatternDirectionOptions.OneDirectionPatternDirection
-    except AttributeError:
-        if 'symmetric' in [direction_one_type.lower(), direction_two_type.lower()]: log_debug("API経由での対称パターン作成がサポートされていないバージョンです。")
     if quantity_two > 1 and dir_two:
         pattern_input.setDirectionTwo(dir_two, adsk.core.ValueInput.createByReal(quantity_two), adsk.core.ValueInput.createByReal(distance_two * scale))
-    pattern_input.pattern_type = 0
-    rect_patterns.add(pattern_input)
+    pattern_input.pattern_type = 0 # 0 = Body Pattern
+    
+    #【修正】堅牢なロジックに変更
+    pattern_feature = rect_patterns.add(pattern_input)
     if new_body_base_name:
-        new_body_index = 1
-        for body in root.bRepBodies:
-            if body.name not in bodies_before: body.name = f"{new_body_base_name}_{new_body_index}"; new_body_index += 1; bodies_before.add(body.name)
+        # パターン機能から直接新しいボディを取得（高速・確実）
+        newly_created_bodies = pattern_feature.bodies
+        for i, body in enumerate(newly_created_bodies):
+            # 新しいボディそれぞれに一意な名前を生成して付与
+            unique_name = get_unique_body_name(root, f"{new_body_base_name}_{i+1}")
+            body.name = unique_name
+            
     return f"{quantity_one}x{quantity_two}の矩形状パターンを作成しました。"
         
-def add_fillet(radius: float=1.0, **kwargs):
-    selections = _ui.activeSelections
-    if selections.count == 0: return "フィレット対象のエッジが選択されていません。"
+def add_fillet(body_name: str, radius: float=1.0, edge_indices: list=None, **kwargs):
+    """
+    指定されたボディの特定のエッジにフィレットを追加します。
+    UIの選択状態に依存せず、引数で直接指定する堅牢な実装です。
+    """
+    target_body = find_entity_by_name(body_name)
+    if not target_body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+
+    all_edges = target_body.edges
     edges_to_fillet = adsk.core.ObjectCollection.create()
-    for sel in selections:
-        if sel.entity.objectType == adsk.fusion.BRepEdge.classType(): edges_to_fillet.add(sel.entity)
-    if edges_to_fillet.count == 0: return "フィレット対象のエッジが見つかりません。"
+
+    if edge_indices and isinstance(edge_indices, list) and len(edge_indices) > 0:
+        # 特定のエッジインデックスが指定された場合
+        log_debug(f"Applying fillet to specified edge indices: {edge_indices}")
+        for index in edge_indices:
+            try:
+                # 入力が数値であることを確認
+                idx = int(index)
+                if 0 <= idx < all_edges.count:
+                    edges_to_fillet.add(all_edges.item(idx))
+                else:
+                    log_debug(f"警告: 無効なエッジインデックス {idx} は無視されます。")
+            except (ValueError, TypeError):
+                log_debug(f"警告: 数値でないエッジインデックス '{index}' は無視されます。")
+    else:
+        # インデックスが指定されない場合は全ての外周エッジを対象にする
+        log_debug("エッジが指定されなかったため、全ての外周エッジを対象にします。")
+        for edge in all_edges:
+            # 2つの面に接しているエッジを外周エッジとみなす
+            if len(edge.faces) == 2:
+                edges_to_fillet.add(edge)
+    
+    if edges_to_fillet.count == 0:
+        return "フィレット対象のエッジが見つかりません。"
+
     root = _app.activeProduct.rootComponent
     fillets = root.features.filletFeatures
     fillet_input = fillets.createInput()
     fillet_input.addConstantRadiusEdgeSet(edges_to_fillet, adsk.core.ValueInput.createByReal(radius * get_fusion_unit_scale()), True)
     fillets.add(fillet_input)
-    return "フィレットを追加しました。"
-        
-def add_chamfer(distance: float=1.0, **kwargs):
-    selections = _ui.activeSelections
-    if selections.count == 0: return "面取り対象のエッジが選択されていません。"
+    
+    return f"{edges_to_fillet.count}個のエッジに半径{radius}mmのフィレットを追加しました。"
+
+def add_chamfer(body_name: str, distance: float=1.0, edge_indices: list=None, **kwargs):
+    """
+    指定されたボディの特定のエッジに面取りを追加します。
+    UIの選択状態に依存せず、引数で直接指定する堅牢な実装です。
+    """
+    target_body = find_entity_by_name(body_name)
+    if not target_body:
+        raise ValueError(f"ボディ '{body_name}' が見つかりません。")
+
+    all_edges = target_body.edges
     edges_to_chamfer = adsk.core.ObjectCollection.create()
-    for sel in selections:
-        if sel.entity.objectType == adsk.fusion.BRepEdge.classType(): edges_to_chamfer.add(sel.entity)
-    if edges_to_chamfer.count == 0: return "面取り対象のエッジが見つかりません。"
+
+    if edge_indices and isinstance(edge_indices, list) and len(edge_indices) > 0:
+        # 特定のエッジインデックスが指定された場合
+        log_debug(f"Applying chamfer to specified edge indices: {edge_indices}")
+        for index in edge_indices:
+            try:
+                # 入力が数値であることを確認
+                idx = int(index)
+                if 0 <= idx < all_edges.count:
+                    edges_to_chamfer.add(all_edges.item(idx))
+                else:
+                    log_debug(f"警告: 無効なエッジインデックス {idx} は無視されます。")
+            except (ValueError, TypeError):
+                log_debug(f"警告: 数値でないエッジインデックス '{index}' は無視されます。")
+    else:
+        # インデックスが指定されない場合は全ての外周エッジを対象にする
+        log_debug("エッジが指定されなかったため、全ての外周エッジを対象にします。")
+        for edge in all_edges:
+            # 2つの面に接しているエッジを外周エッジとみなす
+            if len(edge.faces) == 2:
+                edges_to_chamfer.add(edge)
+
+    if edges_to_chamfer.count == 0:
+        return "面取り対象のエッジが見つかりません。"
+
     root = _app.activeProduct.rootComponent
     chamfers = root.features.chamferFeatures
     chamfer_input = chamfers.createInput(edges_to_chamfer, True)
     chamfer_input.setToEqualDistance(adsk.core.ValueInput.createByReal(distance * get_fusion_unit_scale()))
     chamfers.add(chamfer_input)
-    return "面取りを追加しました。"
-        
-def select_edges(body_name: str, edge_type: str='all', **kwargs):
-    target_body = find_entity_by_name(body_name)
-    if not target_body: raise ValueError(f"ボディ '{body_name}' が見つかりません。")
-    _ui.activeSelections.clear()
-    count = 0
-    for edge in target_body.edges:
-        if edge_type == 'all' or (edge_type == 'circular' and edge.geometry.curveType == adsk.core.Curve3DTypes.Circle3DCurveType):
-            _ui.activeSelections.add(edge)
-            count += 1
-    return f"{count}個のエッジを選択しました。"
 
+    return f"{edges_to_chamfer.count}個のエッジに{distance}mmの面取りを追加しました。"
+    
 def combine_selection(operation: str, new_body_name: str=None, **kwargs):
     selections = _ui.activeSelections
     if selections.count < 2: return "結合するには少なくとも2つのボディを選択してください。"
@@ -807,7 +853,7 @@ def combine_selection(operation: str, new_body_name: str=None, **kwargs):
     combine_input.operation = op_map.get(operation.lower())
     result_feature = combine_features.add(combine_input)
     if new_body_name and result_feature.bodies.count > 0:
-        result_feature.bodies.item(0).name = new_body_name
+        result_feature.bodies.item(0).name = get_unique_body_name(root, new_body_name)
         return result_feature.bodies.item(0).name
     return f"選択したボディを{operation}操作で結合しました。"
 
@@ -833,7 +879,7 @@ def combine_by_name(target_body: str, tool_body: str, operation: str, new_body_n
     combine_input.operation = op_map.get(operation.lower())
     result_feature = combine_features.add(combine_input)
     if new_body_name and result_feature.bodies.count > 0:
-        result_feature.bodies.item(0).name = new_body_name
+        result_feature.bodies.item(0).name = get_unique_body_name(root, new_body_name)
         return result_feature.bodies.item(0).name
     return f"ボディを{operation}操作で結合しました。"
 
@@ -1148,6 +1194,12 @@ def get_edges_info(body_name: str, **kwargs):
             
             # エッジのタイプを判定
             geom = edge.geometry
+            
+            if not geom:
+                edge_data["type"] = "unknown_geometry"
+                edges_info.append(edge_data)
+                continue # 次のエッジの処理に進む
+            
             if geom.curveType == adsk.core.Curve3DTypes.Line3DCurveType:
                 edge_data["type"] = "line"
                 edge_data["start_point"] = {
@@ -1346,7 +1398,7 @@ COMMAND_MAP = {
     'create_polygon_prism': create_polygon_prism, 'create_torus': create_torus, 'create_half_torus': create_half_torus,
     'create_pipe': create_pipe, 'copy_body_symmetric': copy_body_symmetric, 'create_circular_pattern': create_circular_pattern,
     'create_rectangular_pattern': create_rectangular_pattern, 'add_fillet': add_fillet, 'add_chamfer': add_chamfer,
-    'select_edges': select_edges, 'combine_selection': combine_selection, 'select_bodies': select_bodies,
+    'combine_selection': combine_selection, 'select_bodies': select_bodies,
     'combine_by_name': combine_by_name, 'combine_selection_all': combine_selection_all, 'hide_body': hide_body,
     'show_body': show_body, 'move_by_name': move_by_name, 'rotate_by_name': rotate_by_name,
     'select_body': select_body, 'select_all_bodies': select_all_bodies, 'select_all_features': select_all_features,
@@ -1367,7 +1419,7 @@ COMMAND_MAP = {
     'fusion:create_polygon_prism': create_polygon_prism, 'fusion:create_torus': create_torus, 'fusion:create_half_torus': create_half_torus,
     'fusion:create_pipe': create_pipe, 'fusion:copy_body_symmetric': copy_body_symmetric, 'fusion:create_circular_pattern': create_circular_pattern,
     'fusion:create_rectangular_pattern': create_rectangular_pattern, 'fusion:add_fillet': add_fillet, 'fusion:add_chamfer': add_chamfer,
-    'fusion:select_edges': select_edges, 'fusion:combine_selection': combine_selection, 'fusion:select_bodies': select_bodies,
+    'fusion:combine_selection': combine_selection, 'fusion:select_bodies': select_bodies,
     'fusion:combine_by_name': combine_by_name, 'fusion:combine_selection_all': combine_selection_all, 'fusion:hide_body': hide_body,
     'fusion:show_body': show_body, 'fusion:move_by_name': move_by_name, 'fusion:rotate_by_name': rotate_by_name,
     'fusion:select_body': select_body, 'fusion:select_all_bodies': select_all_bodies, 'fusion:select_all_features': select_all_features,
