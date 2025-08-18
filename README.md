@@ -202,17 +202,23 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 
 ---
 
-## 使用例 
+## 使用例
 
 Yutube モデるんですAIチャンネル
 
 **https://www.youtube.com/@ModerundesuAI**
 
-[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/c5be6840-3321-4431-8342-8ce050bc5314)](https://youtu.be/S_-xYwK5HUc?si=JWE3yv5mxRLGJaXd))
+[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/c5be6840-3321-4431-8342-8ce050bc5314)](https://youtu.be/S_-xYwK5HUc?si=JWE3yv5mxRLGJaXd)
+
+[![「400mlのコップを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/820652c7-1199-4ed2-9589-4fc2b1df5a98)](https://youtu.be/abfEWtMKRV4?si=gTVDwvkIkyt81jnb)
+
+[![「使えるコマンドのテストをして」Claude AI MCP ＆ Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/820652c7-1199-4ed2-9589-4fc2b1df5a98)](https://youtu.be/Qn-Skeh3o2c?si=7xKrM_bA7IbXT47-)
+
+など、多数あります！
 
 ---
 
-## ライセンス条項<img width="1422" height="800" alt="20250708_2134_AIと3Dモデリング_simple_compose_01j" src="" />
+## ライセンス条項
 
 
 本ソフトウェアおよびそのソースコードは、著作権者が所有権を有する専有資産であり、著作権法および関連する国際条約によって保護されています。
