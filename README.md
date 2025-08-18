@@ -77,7 +77,7 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 
 3.  **ファイルの配置**
     -   作成したフォルダ内に、このリポジトリの `fusion_mcp_server.py`を含むすべてのファイルとフォルダを配置します。
-    -   同じフォルダ内に、以下の `fusion_mcp_server.manifest` という名前のファイルを修正します。
+    -   同じフォルダ内に、以下の `fusion_mcp_server.manifest` という名前のファイルの内容を修正します。
 
     ```json
     {
@@ -86,7 +86,7 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
       "id": "YOUR_OWN_UNIQUE_GUID",
       "name": "Fusion MCP Server",
       "author": "Kanbara Tomonori",
-      "version": "0.8.8",
+      "version": "0.7.80",
       "description": {
         "en": "Provides a server interface to control Fusion via external file-based commands."
       },
