@@ -1,4 +1,4 @@
-# Fusion MCP Server　addin
+# Fusion MCP Server addin
 
 **バージョン: 0.8.8 (Beta)**
 
