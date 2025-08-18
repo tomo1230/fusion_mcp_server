@@ -202,6 +202,15 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 
 ---
 
+## 使用例 
+
+Yutube モデるんですAIチャンネル
+**https://www.youtube.com/@ModerundesuAI**
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/S_-xYwK5HUc?si=DKhYJwGI-W_BxBO4" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+
+---
+
 ## ライセンス条項
 
 本ソフトウェアおよびそのソースコードは、著作権者が所有権を有する専有資産であり、著作権法および関連する国際条約によって保護されています。
