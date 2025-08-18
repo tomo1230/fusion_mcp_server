@@ -77,25 +77,6 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 
 3.  **ファイルの配置**
     -   作成したフォルダ内に、このリポジトリの `fusion_mcp_server.py`を含むすべてのファイルとフォルダを配置します。
-    -   同じフォルダ内に、以下の `fusion_mcp_server.manifest` という名前のファイルの内容を修正します。
-
-    ```json
-    {
-      "autodeskProduct": "Fusion360",
-      "type": "script",
-      "id": "YOUR_OWN_UNIQUE_GUID",
-      "name": "Fusion MCP Server",
-      "author": "Kanbara Tomonori",
-      "version": "0.7.80",
-      "description": {
-        "en": "Provides a server interface to control Fusion via external file-based commands."
-      },
-      "runOnStartup": false,
-      "supportedOS": "windows|mac",
-      "editEnabled": true
-    }
-    ```
-    **注**: `id` の `YOUR_OWN_UNIQUE_GUID` は、[オンラインGUIDジェネレータ](https://www.uuidgenerator.net/)などで生成した一意のGUIDに置き換えてください。
 
 4.  **Fusion でアドインを再読み込み**
     -   Fusion のアドインダイアログに戻り、「マイ アドイン」リストに「Fusion_MCP_Server」が表示されていることを確認します。
