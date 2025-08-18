@@ -205,9 +205,10 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 ## 使用例 
 
 Yutube モデるんですAIチャンネル
+
 **https://www.youtube.com/@ModerundesuAI**
 
-[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/c5be6840-3321-4431-8342-8ce050bc5314)]([https://youtu.be/5aKI900iGVo?t=1336](https://youtu.be/S_-xYwK5HUc?si=JWE3yv5mxRLGJaXd))
+[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/c5be6840-3321-4431-8342-8ce050bc5314)](https://youtu.be/S_-xYwK5HUc?si=JWE3yv5mxRLGJaXd))
 
 ---
 
