@@ -207,9 +207,7 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 Yutube モデるんですAIチャンネル
 **https://www.youtube.com/@ModerundesuAI**
 
-[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪]([サムネイル画像のURL](http://img.youtube.com/vi/S_-xYwK5HUc/hqdefault.jpg))]([Youtube動画のURL](https://www.youtube.com/embed/S_-xYwK5HUc?si=DKhYJwGI-W_BxBO4))
-
-[![サービス紹介動画](https://user-images.githubusercontent.com/84756197/173222007-3aefa245-4c0e-45e6-9855-91f0e3be89ed.png)](https://youtu.be/5aKI900iGVo?t=1336)
+[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪]([https://user-images.githubusercontent.com/84756197/173222007-3aefa245-4c0e-45e6-9855-91f0e3be89ed.png](http://img.youtube.com/vi/S_-xYwK5HUc/hqdefault.jpg))]([https://www.youtube.com/embed/S_-xYwK5HUc?si=DKhYJwGI-W_BxBO4))
 
 ---
 
