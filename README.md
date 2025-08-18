@@ -207,11 +207,12 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 Yutube モデるんですAIチャンネル
 **https://www.youtube.com/@ModerundesuAI**
 
-[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪]([https://user-images.githubusercontent.com/84756197/173222007-3aefa245-4c0e-45e6-9855-91f0e3be89ed.png](http://img.youtube.com/vi/S_-xYwK5HUc/hqdefault.jpg))]([https://www.youtube.com/embed/S_-xYwK5HUc?si=DKhYJwGI-W_BxBO4))
+[![「サイコロを設計して」Claude AI＆Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/c5be6840-3321-4431-8342-8ce050bc5314)]([https://youtu.be/5aKI900iGVo?t=1336](https://youtu.be/S_-xYwK5HUc?si=JWE3yv5mxRLGJaXd))
 
 ---
 
-## ライセンス条項
+## ライセンス条項<img width="1422" height="800" alt="20250708_2134_AIと3Dモデリング_simple_compose_01j" src="" />
+
 
 本ソフトウェアおよびそのソースコードは、著作権者が所有権を有する専有資産であり、著作権法および関連する国際条約によって保護されています。
 
