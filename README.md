@@ -22,7 +22,7 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 3.  **コマンド実行**: 外部プロセスがこのファイルにJSONコマンドを書き込むと、アドインがそれを検知して読み込み、対応するFusion の機能を実行します。
 4.  **レスポンス返却**: 実行結果（成功、失敗、戻り値など）が `~/Documents/fusion_response.txt` にJSON形式で書き込まれます。
 
-
+このAddinは、Claude Desktop 内で動作する[Claude Mcp サーバー Fusion MCP Server for Claude Desktop](<https://github.com/tomo1230/claude_fusion_mcp_server>)と連携して機能します。
 
 ---
 
