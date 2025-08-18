@@ -204,7 +204,7 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 
 ## 使用例
 
-Yutube モデるんですAIチャンネル
+YouTube モデるんですAI チャンネル
 
 **https://www.youtube.com/@ModerundesuAI**
 
@@ -214,7 +214,13 @@ Yutube モデるんですAIチャンネル
 
 [![「使えるコマンドのテストをして」Claude AI MCP ＆ Autodesk Fusion API 連携🤖AIモデリングチャレンジ！💪](https://github.com/user-attachments/assets/820652c7-1199-4ed2-9589-4fc2b1df5a98)](https://youtu.be/Qn-Skeh3o2c?si=7xKrM_bA7IbXT47-)
 
-など、多数あります！
+「しゃべるだけで、世界がカタチになる。」
+ことばが、モノになる時代。
+『ModerundesuAI』は、AIと会話するだけで3Dモデリングができる、
+未来のモノづくり体験をシェアするYouTubeチャンネルです。
+Fusion 360やBlenderなどのCADソフトとAI（ChatGPTやClaude）を連携させて、
+プロンプト（命令文）でリアルな“カタチ”を自動生成。
+初心者からモデリング好きまで、誰でも「つくる楽しさ」に触れられるコンテンツを発信します！
 
 ---
 
