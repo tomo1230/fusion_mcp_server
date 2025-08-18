@@ -1,8 +1,8 @@
-# Fusion MCP Server addin
+# Fusion MCP Server addin 
 
-**バージョン: 0.8.8 (Beta)**
+**バージョン: 0.8.8 (Beta)　ファイル連携バージョン**
 
-Autodesk Fusion を外部からプログラム的に制御するためのアドインです。このスクリプトは、Fusion 内でローカルサーバーとして動作し、指定されたテキストファイルを監視します。ファイルにJSON形式のコマンドが書き込まれると、それを即座に実行し、3Dモデルの作成、編集、情報取得を自動化します。
+Autodesk Fusion (360) を外部からプログラム的に制御するためのアドインです。このスクリプトは、Fusion 内でローカルサーバーとして動作し、指定されたテキストファイルを監視します。ファイルにJSON形式のコマンドが書き込まれると、それを即座に実行し、3Dモデルの作成、編集、情報取得を自動化します。
 
 このプロジェクトは、Kanbara Tomonori氏によって開発されました。
 
@@ -14,7 +14,7 @@ Autodesk Fusion を外部からプログラム的に制御するためのアド�
 
 ## 概要
 
-このアドインは、Fusion 360のモデリングプロセスを自動化・効率化するための強力なツールです。外部アプリケーションやスクリプトからJSONコマンドを送信するだけで、Fusion 360を直接操作することなく、複雑な形状の作成や繰り返し作業を実行できます。
+このアドインは、Fusion のモデリングプロセスを自動化・効率化するための強力なツールです。外部アプリケーションやスクリプトからJSONコマンドを送信するだけで、Fusion を直接操作することなく、複雑な形状の作成や繰り返し作業を実行できます。
 
 **主な仕組み:**
 1.  **サーバー起動**: Fusion のUIから「連携開始」ボタンをクリックしてサーバーを起動します。
@@ -61,7 +61,7 @@ Autodesk Fusion を外部からプログラム的に制御するためのアド�
 -   **ボディ間関係**: 2つのボディ間の距離、干渉、相対位置を測定 (`get_body_relationships`, `measure_distance`)
 
 ### ユーティリティ
--   **デバッグ**: Fusion 360の座標系情報やボディの配置情報を確認 (`debug_coordinate_info`, `debug_body_placement`)
+-   **デバッグ**: Fusion の座標系情報やボディの配置情報を確認 (`debug_coordinate_info`, `debug_body_placement`)
 -   **マクロ実行**: 複数のコマンドを一度にまとめて実行 (`execute_macro`)
 
 ---
@@ -88,7 +88,7 @@ Autodesk Fusion を外部からプログラム的に制御するためのアド�
       "author": "Kanbara Tomonori",
       "version": "0.8.8",
       "description": {
-        "en": "Provides a server interface to control Fusion 360 via external file-based commands."
+        "en": "Provides a server interface to control Fusion via external file-based commands."
       },
       "runOnStartup": false,
       "supportedOS": "windows|mac",
@@ -199,3 +199,4 @@ Autodesk Fusion を外部からプログラム的に制御するためのアド�
 | **`get_bounding_box`** | ボディのバウンディングボックスを取得 | `body_name` |
 | **`get_mass_properties`** | ボディの質量特性を取得 | `body_name`, `material_density` (g/cm³) |
 | **`measure_distance`** | 2ボディ間の距離を測定 | `body_name1`, `body_name2` |
+
