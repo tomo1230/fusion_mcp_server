@@ -76,8 +76,8 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
     -   `fusion_mcp_server` のような名前で新しいフォルダを作成します。
 
 3.  **ファイルの配置**
-    -   作成したフォルダ内に、このリポジトリの `fusion_mcp_server.py` ファイルを配置します。
-    -   同じフォルダ内に、以下の内容で `fusion_mcp_server.manifest` という名前のファイルを作成します。
+    -   作成したフォルダ内に、このリポジトリの `fusion_mcp_server.py`を含むすべてのファイルを配置します。
+    -   同じフォルダ内に、以下の `fusion_mcp_server.manifest` という名前のファイルを修正します。
 
     ```json
     {
