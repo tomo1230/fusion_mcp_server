@@ -1,4 +1,4 @@
-# fusion_mcp_server.py - v 0.8.8 ベータ版 Beta version 2025.08.08
+# fusion_mcp_server.py - v 0.7.80 ベータ版 Beta version 2025.08.08
 #  
 #  Copyright (c) 2025 Kanbara Tomonori
 #  All rights reserved.
