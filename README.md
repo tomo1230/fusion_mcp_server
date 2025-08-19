@@ -85,6 +85,8 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
     -   Fusion のアドインダイアログに戻り、「マイ アドイン」リストに「fusion_mcp_server」が表示されていることを確認します。
     -   必要であれば、ダイアログを一度閉じて再度開くとリストが更新されます。
 
+<img width="284" height="134" alt="スクリーンショット 2025-08-19 233920" src="https://github.com/user-attachments/assets/394d30a5-f547-41c1-90ab-815ac64efb1b" />
+
 ---
 
 ## 使用方法
