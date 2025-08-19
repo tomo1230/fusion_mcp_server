@@ -102,7 +102,8 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
 2.  **コマンドの送信**
     -   任意のテキストエディタやプログラムを使い、`~/Documents/fusion_command.txt` を開きます。
     -   実行したいコマンドをJSON形式で書き込み、ファイルを保存します。
-    -   実際には、Claude Desktop 内で動作する[Claude Mcp サーバー Fusion MCP Server for Claude Desktop](<https://github.com/tomo1230/claude_fusion_mcp_server>)とリアルタイム連携して動作します。
+    -   実際には、Claude Desktop 内で動作する[Claude Mcp サーバー Fusion MCP Server for Claude Desktop](<https://github.com/tomo1230/claude_fusion_mcp_server>)と
+　　　　このファイルを介してリアルタイム連携して動作します。
 
     **例1: シンプルな立方体の作成**
     ```json
