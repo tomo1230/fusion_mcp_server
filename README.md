@@ -96,15 +96,13 @@ Autodesk Fusion (360) を外部からプログラム的に制御するための�
     -   「デザイン」ワークスペースのユーティリティタブに移動します。
     -   ツールバーに「MCPサーバー連携」という新しいパネルが表示されます。
     -   **「連携開始」** ボタンをクリックします。「MCPサーバー連携を開始しました。」というメッセージが表示されれば成功です。
-    -   停止するには、**「連携停止」** ボタンをクリックします。
       
 　　　<img width="284" height="134" alt="スクリーンショット 2025-08-19 233920" src="https://github.com/user-attachments/assets/394d30a5-f547-41c1-90ab-815ac64efb1b" />
 
 2.  **コマンドの送信**
     -   任意のテキストエディタやプログラムを使い、`~/Documents/fusion_command.txt` を開きます。
     -   実行したいコマンドをJSON形式で書き込み、ファイルを保存します。
-
-　　※実際には、Claude Desktop 内で動作する[Claude Mcp サーバー Fusion MCP Server for Claude Desktop](<https://github.com/tomo1230/claude_fusion_mcp_server>)とリアルタイム連携して動作します。
+    -   実際には、Claude Desktop 内で動作する[Claude Mcp サーバー Fusion MCP Server for Claude Desktop](<https://github.com/tomo1230/claude_fusion_mcp_server>)とリアルタイム連携して動作します。
 
     **例1: シンプルな立方体の作成**
     ```json
