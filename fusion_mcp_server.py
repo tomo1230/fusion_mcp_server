@@ -1,4 +1,4 @@
-# fusion_mcp_server.py - v 0.7.80 ベータ版 Beta version 2025.08.08
+# fusion_mcp_server.py - v 0.7.81 ベータ版 Beta version 2025.08.08
 #  
 #  Copyright (c) 2025 Kanbara Tomonori
 #  All rights reserved.
@@ -939,27 +939,56 @@ def select_all_bodies(**kwargs):
         return f"{root.bRepBodies.count}個のボディをすべて選択しました。"
     return "選択するボディがありません。"
 
-def select_all_features(**kwargs):
-    timeline = _app.activeProduct.timeline
-    if timeline.count > 0:
+def delete_all_features(**kwargs):
+    """
+    タイムライン上のすべてのフィーチャーを効率的に削除します。
+    """
+    try:
+        timeline = _app.activeProduct.timeline
+        initial_count = timeline.count
+        
+        if initial_count == 0:
+            return "削除するフィーチャーがありません。"
+        
+        # 選択をクリアして収集
         _ui.activeSelections.clear()
+        valid_entities = []
+        
         for item in timeline:
-            if item.entity: _ui.activeSelections.add(item.entity)
-        return f"{timeline.count}個のフィーチャを選択しました。"
-    return "選択するフィーチャがありません。"
-
-def delete_selection_features(**kwargs):
-    selections = _ui.activeSelections
-    count = selections.count
-    if count > 0:
-        entities = [sel.entity for sel in selections]
+            if item.entity and item.entity.isValid:
+                _ui.activeSelections.add(item.entity)
+                valid_entities.append(item.entity)
+        
+        selection_count = _ui.activeSelections.count
+        
+        if selection_count == 0:
+            return "削除可能なフィーチャが見つかりませんでした。"
+        
+        # 選択をクリアしてから削除実行
         _ui.activeSelections.clear()
-        for entity in reversed(entities):
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        for entity in reversed(valid_entities):
             try:
-                if hasattr(entity, 'deleteMe') and entity.isValid: entity.deleteMe()
-            except: continue
-        return f"{count}個の選択フィーチャを削除しました。"
-    return "削除するフィーチャが選択されていません。"
+                if hasattr(entity, 'deleteMe') and entity.isValid:
+                    entity.deleteMe()
+                    deleted_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+                continue
+        
+        # 結果メッセージ
+        if failed_count > 0:
+            return f"{deleted_count}個のフィーチャを削除しました。（{failed_count}個は削除できませんでした）"
+        else:
+            return f"{deleted_count}個のフィーチャを削除しました。"
+            
+    except Exception as e:
+        return f"削除処理中にエラーが発生しました: {str(e)}"
         
 def debug_coordinate_info(show_details: bool = True, **kwargs):
     info_text = ""
@@ -1401,8 +1430,8 @@ COMMAND_MAP = {
     'combine_selection': combine_selection, 'select_bodies': select_bodies,
     'combine_by_name': combine_by_name, 'combine_selection_all': combine_selection_all, 'hide_body': hide_body,
     'show_body': show_body, 'move_by_name': move_by_name, 'rotate_by_name': rotate_by_name,
-    'select_body': select_body, 'select_all_bodies': select_all_bodies, 'select_all_features': select_all_features,
-    'delete_selection_features': delete_selection_features, 'debug_coordinate_info': debug_coordinate_info,
+    'select_body': select_body, 'select_all_bodies': select_all_bodies,'delete_all_features': delete_all_features,
+    'debug_coordinate_info': debug_coordinate_info,
     'debug_body_placement': debug_body_placement,
     'create_polygon_sweep': create_polygon_sweep,
     'get_bounding_box': get_bounding_box,
@@ -1422,8 +1451,8 @@ COMMAND_MAP = {
     'fusion:combine_selection': combine_selection, 'fusion:select_bodies': select_bodies,
     'fusion:combine_by_name': combine_by_name, 'fusion:combine_selection_all': combine_selection_all, 'fusion:hide_body': hide_body,
     'fusion:show_body': show_body, 'fusion:move_by_name': move_by_name, 'fusion:rotate_by_name': rotate_by_name,
-    'fusion:select_body': select_body, 'fusion:select_all_bodies': select_all_bodies, 'fusion:select_all_features': select_all_features,
-    'fusion:delete_selection_features': delete_selection_features, 'fusion:debug_coordinate_info': debug_coordinate_info,
+    'fusion:select_body': select_body, 'fusion:select_all_bodies': select_all_bodies, 'fusion:delete_all_features': delete_all_features, 
+    'fusion:debug_coordinate_info': debug_coordinate_info,
     'fusion:debug_body_placement': debug_body_placement,
     'fusion:create_polygon_sweep': create_polygon_sweep,
     'fusion:get_bounding_box': get_bounding_box,
