@@ -1,4 +1,4 @@
-# fusion_mcp_server.py - v 0.7.81 ベータ版 Beta version 2025.08.08
+# fusion_mcp_server.py - v 0.7.82 ベータ版 Beta version 2025.08.26
 #  
 #  Copyright (c) 2025 Kanbara Tomonori
 #  All rights reserved.
@@ -692,7 +692,7 @@ def copy_body_symmetric(source_body_name: str, new_body_name: str, plane: str = 
     mirror_input.pattern_type = 0 # 0 = Body Pattern
     new_body = mirror_features.add(mirror_input).bodies.item(0)
     if new_body_name:
-        new_body.name = get_unique_body_name(root, body_name) #【修正】一意な名前を生成
+        new_body.name = get_unique_body_name(root, new_body_name) #【修正】一意な名前を生成
     return new_body.name
 
 def create_circular_pattern(source_body_name: str, axis: str = 'z', quantity: int = 4, angle: float = 360.0, new_body_base_name: str = None, **kwargs):
